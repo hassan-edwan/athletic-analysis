@@ -15,16 +15,17 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QSizePolicy, QToolTip, QWidget
 
 from athletic_analysis.core.radar import SprintRadar
+from athletic_analysis.ui import theme
 
 _GRID = QColor(128, 128, 128, 60)
 _SPOKE = QColor(128, 128, 128, 90)
-_FILL = QColor(60, 140, 255, 70)
-_OUTLINE = QColor(60, 140, 255, 220)
+_FILL = theme.qcolor(theme.ACCENT, 70)
+_OUTLINE = theme.qcolor(theme.ACCENT, 220)
 _LABEL = QColor(160, 160, 160)
 _NA = QColor(120, 120, 120)
-_SCORE_COLORS = ((60, QColor(208, 69, 60)),   # < 60: major territory
-                 (85, QColor(201, 151, 26)),  # 60–85: needs work
-                 (101, QColor(61, 163, 93)))  # >= 85: solid
+_SCORE_COLORS = ((60, theme.qcolor(theme.BAD)),    # < 60: major territory
+                 (85, theme.qcolor(theme.WARN)),   # 60–85: needs work
+                 (101, theme.qcolor(theme.GOOD)))  # >= 85: solid
 
 # Short labels, same order as core.radar.RADAR_AXES.
 _SHORT = ("Stiffness", "Front-side", "Posture", "Foot placement", "Rhythm")

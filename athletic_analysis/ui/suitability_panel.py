@@ -12,9 +12,10 @@ from PySide6.QtWidgets import (QCheckBox, QFrame, QHBoxLayout, QLabel,
                                QVBoxLayout, QWidget)
 
 from athletic_analysis.core.assessment import VideoAssessment
+from athletic_analysis.ui import theme
 
-_GRADE_COLOR = {"Good": "#3da35d", "Fair": "#c9971a", "Poor": "#d0453c"}
-_SEV_COLOR = {"minor": "#c9971a", "major": "#d0453c"}
+_GRADE_COLOR = {k: theme.hexs(v) for k, v in theme.GRADE_COLORS.items()}
+_SEV_COLOR = {"minor": theme.hexs(theme.WARN), "major": theme.hexs(theme.BAD)}
 _TRANSFORM_LABELS = {
     "reframe": "Auto-reframe (crop + upscale athlete)",
     "enhance": "Enhance contrast / brightness",
@@ -91,18 +92,30 @@ class SuitabilityPanel(QWidget):
             f"· {a.fps:.0f} fps · {a.width}×{a.height}")
         self._clear_issues()
         if not a.issues:
-            ok = QLabel("✓ No problems detected — good to analyze.")
-            ok.setStyleSheet("color: #3da35d;")
-            self._issues.addWidget(ok)
-            self._issue_widgets.append(ok)
+            row = QWidget()
+            hl = QHBoxLayout(row)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.addWidget(theme.make_chip("Good", theme.GOOD))
+            ok = QLabel("No problems detected — good to analyze.")
+            ok.setStyleSheet(f"color: {theme.hexs(theme.GOOD)};")
+            hl.addWidget(ok)
+            hl.addStretch(1)
+            self._issues.addWidget(row)
+            self._issue_widgets.append(row)
         for issue in a.issues:
             c = _SEV_COLOR.get(issue.severity, "#888")
-            w = QLabel(f"<span style='color:{c}'>●</span> <b>{issue.title}</b><br>"
-                       f"<span style='color:gray'>{issue.detail}</span>")
-            w.setTextFormat(Qt.TextFormat.RichText)
-            w.setWordWrap(True)
-            self._issues.addWidget(w)
-            self._issue_widgets.append(w)
+            row = QWidget()
+            hl = QHBoxLayout(row)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.addWidget(theme.make_chip(issue.severity, theme.SEVERITY_COLORS.get(
+                issue.severity, theme.WARN)))
+            text = QLabel(f"<b style='color:{c}'>{issue.title}</b><br>"
+                         f"<span style='color:{theme.hexs(theme.TEXT_MUTED)}'>{issue.detail}</span>")
+            text.setTextFormat(Qt.TextFormat.RichText)
+            text.setWordWrap(True)
+            hl.addWidget(text, stretch=1)
+            self._issues.addWidget(row)
+            self._issue_widgets.append(row)
 
         # Pre-check recommended transforms.
         rec = set(a.recommended_transforms)
@@ -112,7 +125,7 @@ class SuitabilityPanel(QWidget):
             cb.blockSignals(False)
         if a.rotation_suggestion:
             self._rotate_note.setText(
-                f"↻ Auto-rotate {a.rotation_suggestion}° applied to correct "
+                f"Auto-rotate {a.rotation_suggestion}° applied to correct "
                 "orientation.")
         else:
             self._rotate_note.setText("")

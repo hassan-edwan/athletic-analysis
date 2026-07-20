@@ -1,14 +1,36 @@
-"""Metrics display: summary stats + per-step (sprint) or per-jump details."""
+"""Metrics display: summary stats + per-step (sprint) or per-jump details.
+
+The per-step table used to be a bare wall of numbers — accurate, but you had
+to already know the optimal ranges to tell a 145 ms contact from a 95 ms one.
+Cells for the checked columns (contact time, knee/thigh/trunk angles) are now
+tinted with the same good/minor/major coloring the Form tab uses, evaluated
+per step against whichever phase that step actually fell in — not just the
+phase-median FormPanel grades on, so a step can visibly disagree with the
+clip's overall verdict.
+"""
 
 from __future__ import annotations
+
+from typing import Callable
 
 import numpy as np
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QLabel, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 
+from athletic_analysis.core.coaching import PhaseBucket, _evaluate, sprint_checks
 from athletic_analysis.core.metrics.jump import JumpMetrics
-from athletic_analysis.core.metrics.sprint import SprintMetrics
+from athletic_analysis.core.metrics.sprint import SprintMetrics, StepRecord
+from athletic_analysis.ui import theme
+
+# Column index -> (coaching check key, raw value in the check's own units —
+# seconds for contact, degrees for the angle checks).
+_CHECKED_COLUMNS: dict[int, tuple[str, Callable[[StepRecord], float]]] = {
+    2: ("contact_ms", lambda s: s.contact_time_s),
+    6: ("knee_strike", lambda s: s.knee_angle_at_strike),
+    7: ("thigh", lambda s: s.swing_thigh_angle),
+    8: ("trunk", lambda s: s.trunk_lean_at_strike),
+}
 
 
 def _fmt(value: float, decimals: int = 2, suffix: str = "") -> str:
@@ -27,6 +49,15 @@ class MetricsPanel(QWidget):
         self._summary.setWordWrap(True)
         self._summary.setTextFormat(Qt.TextFormat.RichText)
         layout.addWidget(self._summary)
+        self._legend = QLabel(
+            f"Tinted cells: <span style='color:{theme.hexs(theme.GOOD)}'>in range</span> · "
+            f"<span style='color:{theme.hexs(theme.WARN)}'>minor</span> · "
+            f"<span style='color:{theme.hexs(theme.BAD)}'>major</span> deviation for "
+            "that step's own phase.")
+        self._legend.setTextFormat(Qt.TextFormat.RichText)
+        self._legend.setStyleSheet("font-size: 10px;")
+        self._legend.hide()
+        layout.addWidget(self._legend)
         self._table = QTableWidget()
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.cellClicked.connect(self._on_cell_clicked)
@@ -37,9 +68,19 @@ class MetricsPanel(QWidget):
         if 0 <= row < len(self._row_frames):
             self.frame_requested.emit(self._row_frames[row])
 
-    def show_sprint(self, m: SprintMetrics | None) -> None:
+    def _frame_phase(self, buckets: dict[str, PhaseBucket]) -> dict[int, str]:
+        out: dict[int, str] = {}
+        for phase, bucket in buckets.items():
+            for frame in bucket.strike_frames:
+                out[frame] = phase
+        return out
+
+    def show_sprint(self, m: SprintMetrics | None,
+                    buckets: dict[str, PhaseBucket] | None = None,
+                    level: str = "trained") -> None:
         if m is None or not m.steps:
             self._summary.setText("No steps detected yet.")
+            self._legend.hide()
             self._table.clear()
             self._table.setRowCount(0)
             self._row_frames = []
@@ -61,21 +102,41 @@ class MetricsPanel(QWidget):
         self._table.setHorizontalHeaderLabels(headers)
         self._table.setRowCount(len(m.steps))
         self._row_frames = [s.strike_frame for s in m.steps]
-        for r, s in enumerate(m.steps):
+
+        frame_phase = self._frame_phase(buckets) if buckets else {}
+        checks_by_phase = sprint_checks(level) if buckets else {}
+        self._legend.setVisible(bool(buckets))
+
+        for r, step in enumerate(m.steps):
             cells = [
-                s.side, str(s.strike_frame),
-                _fmt(s.contact_time_s * 1000, 0), _fmt(s.flight_time_s * 1000, 0),
-                _fmt(s.step_length), _fmt(s.step_speed),
-                _fmt(s.knee_angle_at_strike, 0),
-                _fmt(s.swing_thigh_angle, 0), _fmt(s.trunk_lean_at_strike, 0),
+                step.side, str(step.strike_frame),
+                _fmt(step.contact_time_s * 1000, 0), _fmt(step.flight_time_s * 1000, 0),
+                _fmt(step.step_length), _fmt(step.step_speed),
+                _fmt(step.knee_angle_at_strike, 0),
+                _fmt(step.swing_thigh_angle, 0), _fmt(step.trunk_lean_at_strike, 0),
             ]
+            phase = frame_phase.get(step.strike_frame)
+            checks = dict(checks_by_phase.get(phase, [])) if phase else {}
             for c, text in enumerate(cells):
-                self._table.setItem(r, c, QTableWidgetItem(text))
+                item = QTableWidgetItem(text)
+                key_getter = _CHECKED_COLUMNS.get(c)
+                if key_getter is not None and phase is not None:
+                    key, getter = key_getter
+                    check = checks.get(key)
+                    if check is not None:
+                        finding = _evaluate(check, getter(step), phase, step.strike_frame)
+                        if finding is not None:
+                            item.setBackground(theme.qcolor(
+                                theme.SEVERITY_COLORS[finding.severity], 55))
+                            item.setToolTip(f"{finding.metric} ({phase}): optimal "
+                                            f"{finding.target_text}")
+                self._table.setItem(r, c, item)
         self._table.resizeColumnsToContents()
 
     def show_jump(self, m: JumpMetrics | None) -> None:
         self._table.clear()
         self._row_frames = []
+        self._legend.hide()
         if m is None or m.takeoff_frame < 0:
             self._summary.setText("No jump detected yet.")
             self._table.setRowCount(0)

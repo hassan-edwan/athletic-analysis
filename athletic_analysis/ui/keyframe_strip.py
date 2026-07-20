@@ -13,6 +13,8 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QScrollArea,
                                QVBoxLayout, QWidget)
 
+from athletic_analysis.ui import theme
+
 THUMB_HEIGHT = 130
 
 
@@ -22,7 +24,7 @@ class _Thumb(QFrame):
     def __init__(self, frame_idx: int, pixmap: QPixmap, caption: str, parent=None):
         super().__init__(parent)
         self._frame_idx = frame_idx
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setObjectName("card")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(3, 3, 3, 3)
@@ -30,7 +32,7 @@ class _Thumb(QFrame):
         image.setPixmap(pixmap)
         layout.addWidget(image)
         text = QLabel(caption)
-        text.setStyleSheet("font-size: 10px;")
+        text.setStyleSheet(f"font-size: 10px; color: {theme.hexs(theme.TEXT_MUTED)}; border: none;")
         text.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(text)
 
@@ -57,7 +59,7 @@ class KeyframeStrip(QWidget):
         outer.addWidget(self._scroll)
         self._thumbs: list[_Thumb] = []
         self._empty = QLabel("Key frames appear here after analysis.")
-        self._empty.setStyleSheet("color: gray;")
+        self._empty.setStyleSheet(f"color: {theme.hexs(theme.TEXT_MUTED)};")
         self._row.insertWidget(0, self._empty)
 
     def set_keyframes(self, entries: list[tuple[int, str]],

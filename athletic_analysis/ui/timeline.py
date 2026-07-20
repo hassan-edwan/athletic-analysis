@@ -6,7 +6,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
-from athletic_analysis.ui.plot_panel import PHASE_COLORS
+from athletic_analysis.ui import theme
+from athletic_analysis.ui.theme import PHASE_COLORS
 
 
 class Timeline(QWidget):
@@ -66,14 +67,14 @@ class Timeline(QWidget):
 
     def paintEvent(self, event) -> None:
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(30, 30, 34))
+        p.fillRect(self.rect(), theme.qcolor(theme.BACKGROUND))
         bar = self.rect().adjusted(4, 12, -4, -12)
-        p.fillRect(bar, QColor(60, 60, 68))
+        p.fillRect(bar, theme.qcolor(theme.SURFACE_RAISED))
         for f0, f1, name in self._phases:
             rgb = PHASE_COLORS.get(name, (160, 160, 160))
             x0, x1 = self._x_of(f0), self._x_of(f1)
             p.fillRect(x0, 4, max(1, x1 - x0), self.height() - 8,
-                       QColor(*rgb, 60))
+                       theme.qcolor(rgb, 60))
         for frame, color, _tip in self._markers:
             x = self._x_of(frame)
             p.setPen(QPen(color, 2))

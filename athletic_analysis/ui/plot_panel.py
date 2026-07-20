@@ -10,17 +10,23 @@ from PySide6.QtGui import QBrush, QColor, QPen
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QGraphicsRectItem,
                                QHBoxLayout, QLabel, QVBoxLayout, QWidget)
 
-# (key, label, color, is_velocity)
+from athletic_analysis.ui import theme
+from athletic_analysis.ui.theme import PHASE_COLORS
+
+# (key, label, color, is_velocity). Left/right pairs use theme.LEG_LEFT/
+# LEG_RIGHT (and their light/dark shades) so a curve's color always matches
+# which leg it's tracking on the video overlay — see theme.py's docstring for
+# the BGR/RGB mixup this used to have (right-side curves rendered blue-ish).
 _SERIES = [
-    ("knee_l", "Knee L", (80, 200, 80), False),
-    ("knee_r", "Knee R", (60, 140, 255), False),
-    ("hip_l", "Hip L", (140, 220, 140), False),
-    ("hip_r", "Hip R", (150, 190, 255), False),
-    ("ankle_l", "Ankle L", (40, 150, 40), False),
-    ("ankle_r", "Ankle R", (30, 100, 200), False),
+    ("knee_l", "Knee L", theme.LEG_LEFT, False),
+    ("knee_r", "Knee R", theme.LEG_RIGHT, False),
+    ("hip_l", "Hip L", theme.LEG_LEFT_LIGHT, False),
+    ("hip_r", "Hip R", theme.LEG_RIGHT_LIGHT, False),
+    ("ankle_l", "Ankle L", theme.LEG_LEFT_DARK, False),
+    ("ankle_r", "Ankle R", theme.LEG_RIGHT_DARK, False),
     ("trunk_lean", "Trunk lean", (230, 200, 160), False),
     ("thigh_l", "Thigh L", (200, 230, 90), False),
-    ("thigh_r", "Thigh R", (90, 200, 230), False),
+    ("thigh_r", "Thigh R", (235, 165, 90), False),
     ("run_speed", "Run speed", (255, 210, 60), True),
     ("hip_speed", "Hip speed", (255, 170, 40), True),
     ("hip_vx", "Hip horiz vel", (255, 140, 60), True),
@@ -33,17 +39,6 @@ _PRESETS: dict[str, set[str] | None] = {
     "Ground contact": {"knee_l", "knee_r", "ankle_l", "ankle_r"},
     "Posture": {"trunk_lean", "thigh_l", "thigh_r"},
     "Custom": None,
-}
-
-PHASE_COLORS = {
-    "drive": (255, 120, 60),
-    "acceleration": (255, 200, 60),
-    "max velocity": (80, 220, 120),
-    "deceleration": (150, 150, 220),
-    "countermovement": (255, 200, 60),
-    "drive up": (255, 120, 60),
-    "flight": (80, 220, 120),
-    "landing": (150, 150, 220),
 }
 
 

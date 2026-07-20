@@ -9,11 +9,13 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (QComboBox, QDockWidget, QFileDialog,
                                QInputDialog, QLabel, QMainWindow, QMessageBox,
-                               QProgressBar, QVBoxLayout, QWidget)
+                               QProgressBar, QStyle, QTabWidget, QVBoxLayout,
+                               QWidget)
 
 from athletic_analysis.core.calibration import Calibration
-from athletic_analysis.core.coaching import (ATHLETE_LEVELS, plot_target_bands,
-                                             segment_phases)
+from athletic_analysis.core.coaching import (ATHLETE_LEVELS, bucket_sprint_steps,
+                                             plot_target_bands, segment_phases)
+from athletic_analysis.core.compare import build_comparisons
 from athletic_analysis.core.settings import MODEL_TIERS, Settings
 from athletic_analysis.core.pose.skeleton import (draw_angle_labels,
                                                   draw_info_text, draw_pose)
@@ -22,8 +24,10 @@ from athletic_analysis.core.video_source import VideoSource
 from athletic_analysis.export.csv_export import export_frames_csv, export_metrics_csv
 from athletic_analysis.export.video_export import export_annotated_video
 from athletic_analysis.core.preprocess import Preprocessor
+from athletic_analysis.ui import theme
 from athletic_analysis.ui.analysis_worker import AnalysisWorker
 from athletic_analysis.ui.assessment_worker import AssessmentWorker
+from athletic_analysis.ui.compare_panel import ComparePanel
 from athletic_analysis.ui.form_panel import FormPanel
 from athletic_analysis.ui.keyframe_strip import KeyframeStrip
 from athletic_analysis.ui.metrics_panel import MetricsPanel
@@ -37,14 +41,17 @@ from athletic_analysis.ui.video_widget import VideoWidget
 
 OVERLAY_ANGLES = ["knee_l", "knee_r", "hip_l", "hip_r", "trunk_lean"]
 
+# Left/right use the same theme colors as the video overlay skeleton and
+# every chart (see theme.py's docstring — this used to be a real bug: the
+# right-side marker color here was a BGR tuple copied into an RGB QColor).
 MARKER_COLORS = {
-    ("strike", "left"): QColor(80, 200, 80),
-    ("strike", "right"): QColor(60, 140, 255),
-    ("toeoff", "left"): QColor(50, 120, 50),
-    ("toeoff", "right"): QColor(40, 80, 150),
-    "takeoff": QColor(255, 80, 80),
-    "landing": QColor(80, 220, 255),
-    "cm_bottom": QColor(220, 100, 220),
+    ("strike", "left"): theme.qcolor(theme.LEG_LEFT),
+    ("strike", "right"): theme.qcolor(theme.LEG_RIGHT),
+    ("toeoff", "left"): theme.qcolor(theme.LEG_LEFT_DARK),
+    ("toeoff", "right"): theme.qcolor(theme.LEG_RIGHT_DARK),
+    "takeoff": theme.qcolor(theme.TAKEOFF),
+    "landing": theme.qcolor(theme.LANDING_EVENT),
+    "cm_bottom": theme.qcolor(theme.CM_BOTTOM),
 }
 
 
@@ -76,54 +83,56 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.timeline)
         self.setCentralWidget(central)
 
-        # right docks: Summary (rep card) first, details behind it
-        self.rep_card = RepCard()
-        dock_summary = QDockWidget("Summary", self)
-        dock_summary.setWidget(self.rep_card)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock_summary)
-
-        self.metrics_panel = MetricsPanel()
-        dock_metrics = QDockWidget("Metrics", self)
-        dock_metrics.setWidget(self.metrics_panel)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock_metrics)
-
-        self.form_panel = FormPanel()
-        dock_form = QDockWidget("Form analysis", self)
-        dock_form.setWidget(self.form_panel)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock_form)
-
+        # Single side panel, single tab strip — previously this was two
+        # separate tabified dock groups (right + bottom) whose tab bars
+        # collided at the shared corner and squeezed each other to slivers.
+        # One QTabWidget in one dock means one row of tabs, full dock width,
+        # and a natural progressive order: check the clip, see the verdict,
+        # dig into why, then the raw numbers underneath.
         self.suitability_panel = SuitabilityPanel()
-        dock_suit = QDockWidget("Suitability", self)
-        dock_suit.setWidget(self.suitability_panel)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock_suit)
-        self.tabifyDockWidget(dock_summary, dock_metrics)
-        self.tabifyDockWidget(dock_metrics, dock_form)
-        self.tabifyDockWidget(dock_form, dock_suit)
-        dock_summary.raise_()
-
-        # bottom dock: curves / per-step bars / key frames
-        from PySide6.QtWidgets import QTabWidget
-
-        self.plot_panel = PlotPanel()
+        self.rep_card = RepCard()
+        self.form_panel = FormPanel()
+        self.compare_panel = ComparePanel(self._render_keyframe)
         self.step_charts = StepCharts()
         self.keyframe_strip = KeyframeStrip()
-        bottom_tabs = QTabWidget()
-        bottom_tabs.addTab(self.plot_panel, "Curves")
-        bottom_tabs.addTab(self.step_charts, "Steps")
-        bottom_tabs.addTab(self.keyframe_strip, "Key frames")
-        dock_plots = QDockWidget("Analysis", self)
-        dock_plots.setWidget(bottom_tabs)
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock_plots)
+        self.plot_panel = PlotPanel()
+        self.metrics_panel = MetricsPanel()
+
+        side_tabs = QTabWidget()
+        side_tabs.addTab(self.suitability_panel, "Suitability")
+        side_tabs.addTab(self.rep_card, "Summary")
+        side_tabs.addTab(self.form_panel, "Form")
+        side_tabs.addTab(self.compare_panel, "Compare")
+        side_tabs.addTab(self.step_charts, "Steps")
+        side_tabs.addTab(self.keyframe_strip, "Key frames")
+        side_tabs.addTab(self.plot_panel, "Curves")
+        side_tabs.addTab(self.metrics_panel, "Metrics")
+        self.side_tabs = side_tabs
+
+        dock_side = QDockWidget("Analysis", self)
+        dock_side.setObjectName("dock_side")
+        dock_side.setWidget(side_tabs)
+        dock_side.setMinimumWidth(440)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock_side)
 
         # toolbar
         toolbar = self.addToolBar("Main")
         toolbar.setMovable(False)
-        self.act_open = QAction("Open Video…", self)
-        self.act_analyze = QAction("Run Pose Analysis", self)
+        style = self.style()
+        self.act_open = QAction(
+            style.standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon),
+            "Open Video…", self)
+        self.act_analyze = QAction(
+            style.standardIcon(QStyle.StandardPixmap.SP_MediaPlay),
+            "Run Pose Analysis", self)
         self.act_capture_fps = QAction("Capture FPS…", self)
         self.act_calibrate = QAction("Calibrate…", self)
-        self.act_export_csv = QAction("Export CSV…", self)
-        self.act_export_video = QAction("Export Annotated Video…", self)
+        self.act_export_csv = QAction(
+            style.standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton),
+            "Export CSV…", self)
+        self.act_export_video = QAction(
+            style.standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton),
+            "Export Annotated Video…", self)
         toolbar.addAction(self.act_open)
         toolbar.addAction(self.act_analyze)
         toolbar.addSeparator()
@@ -188,6 +197,7 @@ class MainWindow(QMainWindow):
         self.metrics_panel.frame_requested.connect(self.seek)
         self.form_panel.frame_requested.connect(self.seek)
         self.rep_card.frame_requested.connect(self.seek)
+        self.compare_panel.frame_requested.connect(self.seek)
         self.step_charts.frame_requested.connect(self.seek)
         self.keyframe_strip.frame_requested.connect(self.seek)
         self.timeline.phase_zoom_requested.connect(self.plot_panel.zoom_to_frames)
@@ -419,6 +429,7 @@ class MainWindow(QMainWindow):
             self.rep_card.clear("Run pose analysis to see this rep's summary.")
             self.step_charts.set_steps([], "BH")
             self.keyframe_strip.set_keyframes([], lambda _f: None)
+            self.compare_panel.set_comparisons([])
             self._update_actions()
             return
         self.plot_panel.set_data(s.angles, s.velocities, s.fps, s.velocity_unit)
@@ -428,7 +439,11 @@ class MainWindow(QMainWindow):
             for ev in s.gait_events:
                 color = MARKER_COLORS[(ev.kind, ev.side)]
                 markers.append((ev.frame, color, f"{ev.side} {ev.kind}"))
-            self.metrics_panel.show_sprint(s.sprint_metrics)
+            has_steps = bool(s.sprint_metrics and s.sprint_metrics.steps)
+            buckets = (bucket_sprint_steps(s.keypoints, s.sprint_metrics,
+                                           s.velocities, s.fps)
+                      if has_steps else {})
+            self.metrics_panel.show_sprint(s.sprint_metrics, buckets, s.athlete_level)
             self.form_panel.show_findings(s.sprint_form)
             self.rep_card.show_sprint(s.sprint_metrics, s.sprint_form,
                                       s.quality, s.model_tier,
@@ -445,12 +460,20 @@ class MainWindow(QMainWindow):
                 knee_txt = f" · knee {knee:.0f}°" if np.isfinite(knee) else ""
                 keyframes.append((step.strike_frame,
                                   f"{step.side} strike f{step.strike_frame}{knee_txt}"))
+            if has_steps:
+                comparisons = build_comparisons(s.sprint_form, buckets, s.athlete_level)
+                self.compare_panel.set_comparisons(comparisons)
+            else:
+                self.compare_panel.set_comparisons([])
         else:
             self.metrics_panel.show_jump(s.jump_metrics)
             self.form_panel.show_findings(s.jump_form)
             self.rep_card.show_jump(s.jump_metrics, s.jump_form,
                                     s.quality, s.model_tier)
             self.step_charts.set_steps([], "BH")
+            self.compare_panel.set_comparisons(
+                [], "Compare isn't available for jumps yet — it needs the "
+                    "repeated per-phase steps a sprint has.")
             jump_spans: list[tuple[int, int, str]] = []
             if s.jump_phases:
                 jp = s.jump_phases

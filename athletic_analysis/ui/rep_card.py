@@ -17,17 +17,17 @@ from athletic_analysis.core.confidence import ClipQuality
 from athletic_analysis.core.metrics.jump import JumpMetrics
 from athletic_analysis.core.metrics.sprint import SprintMetrics
 from athletic_analysis.core.radar import SprintRadar
+from athletic_analysis.ui import theme
 from athletic_analysis.ui.radar_widget import RadarWidget
 
-_SEV_ICON = {"major": "⚠", "minor": "○"}  # ⚠ / ○
-_CONF_COLOR = {"High": "#3da35d", "Medium": "#c9971a", "Low": "#d0453c"}
+_CONF_COLOR = {k: theme.hexs(v) for k, v in theme.CONF_COLORS.items()}
 
 
 def _conf_badge(level: str, limiter: str = "") -> str:
-    """Small colored HTML chip for a confidence level."""
+    """Small colored HTML label for a confidence level."""
     color = _CONF_COLOR.get(level, "#888")
     text = level if not limiter else f"{level} · {limiter}"
-    return (f"<span style='color:{color}; font-size:10px;'>● {text}</span>")
+    return f"<span style='color:{color}; font-size:10px; font-weight:600;'>{text}</span>"
 
 
 def _fmt(value: float, decimals: int = 2) -> str:
@@ -37,17 +37,19 @@ def _fmt(value: float, decimals: int = 2) -> str:
 
 
 class _HeroTile(QFrame):
-    def __init__(self, parent=None):
+    def __init__(self, accent: theme.Rgb = theme.ACCENT, parent=None):
         super().__init__(parent)
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setObjectName("heroTile")
+        self.setStyleSheet(f"QFrame#heroTile {{ border-left: 3px solid {theme.hexs(accent)}; }}")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
         self.value_label = QLabel("–")
-        self.value_label.setStyleSheet("font-size: 22px; font-weight: 600;")
+        self.value_label.setStyleSheet("font-size: 22px; font-weight: 600; border: none;")
         self.caption_label = QLabel("")
-        self.caption_label.setStyleSheet("color: gray; font-size: 11px;")
+        self.caption_label.setStyleSheet(f"color: {theme.hexs(theme.TEXT_MUTED)}; font-size: 11px; border: none;")
         self.badge_label = QLabel("")
         self.badge_label.setTextFormat(Qt.TextFormat.RichText)
+        self.badge_label.setStyleSheet("border: none;")
         layout.addWidget(self.value_label)
         layout.addWidget(self.caption_label)
         layout.addWidget(self.badge_label)
@@ -89,7 +91,9 @@ class RepCard(QWidget):
         self._title.setStyleSheet("font-size: 14px; font-weight: 600;")
         layout.addWidget(self._title)
 
-        self._tiles = [_HeroTile() for _ in range(4)]
+        _tile_accents = [theme.ACCENT, theme.PHASE_COLORS["acceleration"],
+                        theme.PHASE_COLORS["drive"], theme.PHASE_COLORS["deceleration"]]
+        self._tiles = [_HeroTile(accent) for accent in _tile_accents]
         grid = QGridLayout()
         for i, tile in enumerate(self._tiles):
             grid.addWidget(tile, i // 2, i % 2)
@@ -111,13 +115,13 @@ class RepCard(QWidget):
         self._issues_box = QVBoxLayout()
         layout.addLayout(self._issues_box)
         layout.addStretch(1)
-        self._issue_buttons: list[QPushButton] = []
+        self._issue_rows: list[QWidget] = []
 
     def _set_issues(self, findings: list[FormFinding]) -> None:
-        for btn in self._issue_buttons:
-            self._issues_box.removeWidget(btn)
-            btn.deleteLater()
-        self._issue_buttons = []
+        for row in self._issue_rows:
+            self._issues_box.removeWidget(row)
+            row.deleteLater()
+        self._issue_rows = []
         # Prefer confident faults as headline issues; low-confidence ones sink
         # to the bottom and are tagged, never silently trusted.
         faults = [f for f in findings if f.severity != "good"]
@@ -129,30 +133,38 @@ class RepCard(QWidget):
         faults.sort(key=lambda f: (conf_rank(f), SEVERITY_ORDER.get(f.severity, 3)))
         problems = faults[:3]
         if not problems and findings:
-            label = QPushButton("✓ No form faults detected in this rep")
-            label.setFlat(True)
-            label.setStyleSheet("text-align: left; color: #3da35d; border: none;")
-            self._issues_box.addWidget(label)
-            self._issue_buttons.append(label)
+            row = QWidget()
+            hl = QHBoxLayout(row)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.addWidget(theme.make_chip("Good", theme.GOOD))
+            text = QLabel("No form faults detected in this rep")
+            text.setStyleSheet(f"color: {theme.hexs(theme.GOOD)}; border: none;")
+            hl.addWidget(text)
+            hl.addStretch(1)
+            self._issues_box.addWidget(row)
+            self._issue_rows.append(row)
             return
         for f in problems:
-            icon = _SEV_ICON.get(f.severity, "")
-            color = "#d0453c" if f.severity == "major" else "#c9971a"
+            row = QWidget()
+            hl = QHBoxLayout(row)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.addWidget(theme.make_chip(f.severity, theme.SEVERITY_COLORS.get(f.severity, theme.WARN)))
             low = f.confidence is not None and f.confidence.level == "Low"
-            tag = "  ⚠ low confidence — verify" if low else ""
-            btn = QPushButton(f"{icon} {f.metric} ({f.phase}): {f.value_text} "
-                              f"vs optimal {f.target_text} — click to view{tag}")
+            if low:
+                hl.addWidget(theme.make_chip("verify", theme.TEXT_MUTED, filled=False))
+            btn = QPushButton(f"{f.metric} ({f.phase}): {f.value_text} "
+                              f"vs optimal {f.target_text}")
             btn.setFlat(True)
             tip = f.cue + (f"\n\nSource: {f.source}" if f.source else "")
             if f.confidence and f.confidence.limiter:
                 tip += f"\nConfidence limited by: {f.confidence.limiter}"
             btn.setToolTip(tip)
-            btn.setStyleSheet(
-                f"text-align: left; color: {color}; border: none; padding: 2px;")
+            btn.setStyleSheet("text-align: left; border: none; padding: 2px;")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda _=False, fr=f.frame: self.frame_requested.emit(fr))
-            self._issues_box.addWidget(btn)
-            self._issue_buttons.append(btn)
+            hl.addWidget(btn, stretch=1)
+            self._issues_box.addWidget(row)
+            self._issue_rows.append(row)
 
     def _set_quality(self, q: ClipQuality | None, model_tier: str) -> None:
         if q is None:
@@ -162,7 +174,7 @@ class RepCard(QWidget):
         notes = " · ".join(q.notes)
         self._quality.setText(
             f"Analysis quality: {badge}<br>"
-            f"<span style='color:gray;'>{notes} · model: {model_tier}</span>")
+            f"<span style='color:{theme.hexs(theme.TEXT_MUTED)};'>{notes} · model: {model_tier}</span>")
 
     def show_sprint(self, m: SprintMetrics | None,
                     findings: list[FormFinding],

@@ -10,9 +10,10 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from athletic_analysis.core.metrics.sprint import StepRecord
+from athletic_analysis.ui import theme
 
-_LEFT = (80, 200, 80)
-_RIGHT = (60, 140, 255)
+_LEFT = theme.LEG_LEFT
+_RIGHT = theme.LEG_RIGHT
 
 
 class StepCharts(QWidget):
@@ -25,12 +26,13 @@ class StepCharts(QWidget):
 
         legend = QHBoxLayout()
         for name, color in (("left", _LEFT), ("right", _RIGHT)):
-            chip = QLabel(f"■ {name}")
-            chip.setStyleSheet("color: rgb({},{},{});".format(*color))
-            legend.addWidget(chip)
+            legend.addWidget(theme.make_swatch(color))
+            label = QLabel(name)
+            label.setStyleSheet(f"color: {theme.hexs(color)};")
+            legend.addWidget(label)
         legend.addStretch(1)
         self._hint = QLabel("click a bar to view that step")
-        self._hint.setStyleSheet("color: gray;")
+        self._hint.setStyleSheet(f"color: {theme.hexs(theme.TEXT_MUTED)};")
         legend.addWidget(self._hint)
         layout.addLayout(legend)
 

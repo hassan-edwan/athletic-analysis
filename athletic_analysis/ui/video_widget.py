@@ -10,6 +10,8 @@ from PySide6.QtCore import QPoint, QRect, Qt, Signal
 from PySide6.QtGui import QImage, QPainter, QPen, QColor
 from PySide6.QtWidgets import QWidget
 
+from athletic_analysis.ui import theme
+
 
 class VideoWidget(QWidget):
     point_picked = Signal(float, float)  # frame coordinates
@@ -85,7 +87,7 @@ class VideoWidget(QWidget):
         if self._image is not None:
             painter.drawImage(self._display_rect(), self._image)
         if self._picking and self._pick_points:
-            pen = QPen(QColor(255, 80, 80), 2)
+            pen = QPen(theme.qcolor(theme.ACCENT), 2)
             painter.setPen(pen)
             pts = [self._frame_to_widget(x, y) for x, y in self._pick_points]
             for p in pts:

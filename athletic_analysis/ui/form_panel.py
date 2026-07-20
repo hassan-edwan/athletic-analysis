@@ -11,15 +11,11 @@ from PySide6.QtWidgets import (QLabel, QTableWidget, QTableWidgetItem,
 
 from athletic_analysis.core.coaching import FormFinding, summarize
 from athletic_analysis.core.diagnostics import Diagnosis, diagnose
+from athletic_analysis.ui import theme
 
-_SEVERITY_BG = {
-    "good": QColor(60, 170, 90, 55),
-    "minor": QColor(235, 180, 40, 70),
-    "major": QColor(220, 70, 60, 80),
-}
+_SEVERITY_BG = {k: theme.qcolor(v, 60) for k, v in theme.SEVERITY_COLORS.items()}
 _SEVERITY_LABEL = {"good": "OK", "minor": "Minor", "major": "Fix"}
-_CONF_FG = {"High": QColor(80, 200, 120), "Medium": QColor(225, 175, 55),
-            "Low": QColor(225, 90, 80)}
+_CONF_FG = {k: theme.qcolor(v) for k, v in theme.CONF_COLORS.items()}
 
 
 class FormPanel(QWidget):
@@ -76,17 +72,18 @@ class FormPanel(QWidget):
             lis = "".join(f"<li>{item}</li>" for item in items)
             return f"<ul style='margin: 2px 0 6px 16px;'>{lis}</ul>"
 
-        color = "#d0453c" if finding.severity == "major" else "#c9971a"
+        color = theme.hexs(theme.SEVERITY_COLORS.get(finding.severity, theme.WARN))
+        muted = theme.hexs(theme.TEXT_MUTED)
         parts = [f"<b style='color:{color};'>{diag.title}</b>"
-                 f" <span style='color:gray;'>({finding.phase} · measured "
+                 f" <span style='color:{muted};'>({finding.phase} · measured "
                  f"{finding.value_text} vs optimal {finding.target_text})</span>",
                  "<b>Why this happens</b>", bullets(diag.technical_causes),
                  "<b>Likely physical limiters</b>", bullets(diag.muscle_factors),
                  "<b>Corrective drills</b>", bullets(diag.drills)]
         if diag.phase_note:
-            parts.append(f"<i style='color:gray;'>{diag.phase_note}</i>")
+            parts.append(f"<i style='color:{muted};'>{diag.phase_note}</i>")
         if diag.source:
-            parts.append(f"<span style='color:gray; font-size:10px;'>Source: "
+            parts.append(f"<span style='color:{muted}; font-size:10px;'>Source: "
                          f"{diag.source}</span>")
         return "<br>".join(parts)
 
