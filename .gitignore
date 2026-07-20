@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+*.analysis.json
+
+# Swift Package Manager build artifacts (ios/AthleticAnalysisCore/.build/)
+.build/
+
+# Local Claude Code state
+.claude/
