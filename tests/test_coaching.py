@@ -2,8 +2,9 @@ import numpy as np
 
 from athletic_analysis.core.coaching import (analyze_jump_form,
                                              analyze_sprint_form, jump_checks,
-                                             plot_target_bands, segment_phases,
-                                             sprint_checks, summarize)
+                                             metric_help, plot_target_bands,
+                                             segment_phases, sprint_checks,
+                                             summarize)
 from athletic_analysis.core.metrics.jump import JumpMetrics
 from athletic_analysis.core.metrics.sprint import SprintMetrics, StepRecord
 from athletic_analysis.core.pose.skeleton import KP
@@ -219,6 +220,19 @@ def test_jump_findings_carry_key_and_deviation():
                    if f.metric == "Peak knee flexion on landing")
     assert landing.key == "peak_knee_flexion_landing"
     assert landing.deviation == "high"
+
+
+def test_metric_help_covers_every_sprint_and_jump_key():
+    for level in ("developmental", "trained", "elite"):
+        for _phase, checks in sprint_checks(level).items():
+            for key, _check in checks:
+                assert metric_help(key), f"no metric_help() text for {key!r}"
+        for attr, _check in jump_checks(level):
+            assert metric_help(attr), f"no metric_help() text for {attr!r}"
+
+
+def test_metric_help_unknown_key_is_empty_not_an_error():
+    assert metric_help("not_a_real_key") == ""
 
 
 def test_bucket_sprint_steps_constant_speed():

@@ -263,6 +263,54 @@ def jump_checks(level: str = "trained", length_unit: str = "BH"
     ]
 
 
+# --- plain-language "what is this measuring" -----------------------------
+# Independent of whether a value is good or bad (that's what Check.cue_low/
+# cue_high are for) — this is the neutral sentence a metric name alone never
+# carries. One entry per sprint_checks() key and per jump_checks() attr;
+# reused everywhere a metric name appears on its own (column headers, chart
+# captions, checkbox tooltips) so a user never has to already know the
+# vocabulary to read the app.
+_METRIC_HELP: dict[str, str] = {
+    "trunk": "How far forward your torso tips at that instant. Different "
+             "phases call for different amounts — a big forward lean out of "
+             "the start, close to upright at top speed.",
+    "contact_ms": "How long your foot stays on the ground each step. "
+                  "Shorter generally means a stiffer, faster step.",
+    "knee_strike": "How bent your leg is the instant your foot lands. Too "
+                   "bent and the leg absorbs instead of springing back; too "
+                   "straight and there's no give.",
+    "thigh": "How high your swing leg's thigh rises relative to vertical. "
+             "More lift usually means better front-side mechanics at speed.",
+    "cadence": "How many steps you take per minute. Higher generally means "
+               "quicker turnover, but only if each step still finishes its "
+               "push.",
+    "overstride": "How far in front of your hips your foot lands. Landing "
+                  "too far ahead brakes you with every step.",
+    "countermovement_depth": "How far your hips dip down before you jump. "
+                             "Deeper can mean more force, but too deep or "
+                             "slow costs you the stretch-reflex advantage.",
+    "knee_angle_at_takeoff": "How straight your legs are the instant you "
+                             "leave the ground. Full extension means you're "
+                             "not leaving power on the table.",
+    "trunk_lean_at_takeoff": "How upright your torso is as you leave the "
+                             "ground. Leaning too far forward or back bleeds "
+                             "vertical force sideways.",
+    "peak_knee_flexion_landing": "How much your knees bend to absorb the "
+                                 "landing. Too stiff transmits impact up the "
+                                 "joint chain; too deep can mean poor "
+                                 "control.",
+    "knee_ankle_sep_ratio_landing": "A frontal-view check for knees caving "
+                                    "inward (valgus) on landing.",
+}
+
+
+def metric_help(key: str) -> str:
+    """One plain-language sentence describing what `key` measures — empty
+    string for an unknown key rather than raising, since this is always used
+    for optional supplementary UI text (tooltips, captions)."""
+    return _METRIC_HELP.get(key, "")
+
+
 def segment_phases(run_speed: np.ndarray | None, fps: float) -> list[tuple[int, int, str]]:
     """Per-frame phase segmentation of a sprint for display: contiguous
     (start_frame, end_frame, phase) spans. Before the speed peak frames are

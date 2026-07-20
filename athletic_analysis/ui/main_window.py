@@ -91,8 +91,8 @@ class MainWindow(QMainWindow):
         # dig into why, then the raw numbers underneath.
         self.suitability_panel = SuitabilityPanel()
         self.rep_card = RepCard()
-        self.form_panel = FormPanel()
-        self.compare_panel = ComparePanel(self._render_keyframe)
+        self.form_panel = FormPanel(self._render_replay)
+        self.compare_panel = ComparePanel(self._render_replay)
         self.step_charts = StepCharts()
         self.keyframe_strip = KeyframeStrip()
         self.plot_panel = PlotPanel()
@@ -444,7 +444,7 @@ class MainWindow(QMainWindow):
                                            s.velocities, s.fps)
                       if has_steps else {})
             self.metrics_panel.show_sprint(s.sprint_metrics, buckets, s.athlete_level)
-            self.form_panel.show_findings(s.sprint_form)
+            self.form_panel.show_findings(s.sprint_form, buckets, s.athlete_level)
             self.rep_card.show_sprint(s.sprint_metrics, s.sprint_form,
                                       s.quality, s.model_tier,
                                       radar=s.sprint_radar)
@@ -454,7 +454,8 @@ class MainWindow(QMainWindow):
             self.timeline.set_phases(spans)
             steps = s.sprint_metrics.steps if s.sprint_metrics else []
             self.step_charts.set_steps(steps, s.sprint_metrics.length_unit
-                                       if s.sprint_metrics else "BH")
+                                       if s.sprint_metrics else "BH",
+                                       buckets, s.athlete_level)
             for step in steps[:14]:
                 knee = step.knee_angle_at_strike
                 knee_txt = f" · knee {knee:.0f}°" if np.isfinite(knee) else ""
@@ -516,6 +517,34 @@ class MainWindow(QMainWindow):
         if s is not None and s.keypoints is not None and frame < len(s.keypoints):
             draw_pose(image, s.keypoints[frame])
         return image
+
+    def _render_keyframe_range(self, center_frame: int, half_window_frames: int,
+                               max_frames: int = 16) -> list[np.ndarray]:
+        """Every rendered frame in [center - half_window, center + half_window],
+        subsampled to at most `max_frames` — a replay clip is meant to be a
+        short, slow-motion loop, not a full re-decode of a high-fps clip's
+        worth of frames every time a comparison card is built."""
+        if not self.source:
+            return []
+        lo = max(0, center_frame - half_window_frames)
+        hi = min(self.source.frame_count - 1, center_frame + half_window_frames)
+        if hi < lo:
+            return []
+        frames = list(range(lo, hi + 1))
+        if len(frames) > max_frames:
+            idx = np.linspace(0, len(frames) - 1, max_frames)
+            picked = [frames[round(i)] for i in idx]
+            seen: set[int] = set()
+            frames = [f for f in picked if not (f in seen or seen.add(f))]
+        return [img for f in frames if (img := self._render_keyframe(f)) is not None]
+
+    def _render_replay(self, center_frame: int) -> list[np.ndarray]:
+        """A ~0.5 s-either-side replay clip around `center_frame` — the
+        real-footage half of every ComparePanel/FormPanel visual comparison.
+        Bundled here (rather than passing fps around) since only
+        main_window knows the clip's fps."""
+        fps = self.source.fps if self.source else 30.0
+        return self._render_keyframe_range(center_frame, round(0.5 * fps))
 
     def _on_mode_changed(self) -> None:
         if self.session:

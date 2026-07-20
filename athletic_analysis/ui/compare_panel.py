@@ -1,35 +1,29 @@
 """Compare tab: each form fault paired with a real example of the athlete
 doing it well — or, when nothing in the clip pulls it off, a schematic
 diagram at the target angle. Answers "what should this actually look like?"
-visually, side by side, instead of leaving the athlete to interpret a number
-against a range on their own."""
+visually, side by side, and as a short slow-motion replay rather than a
+still frame — a snapshot doesn't show enough about motion to teach it."""
 
 from __future__ import annotations
 
 from typing import Callable
 
-import cv2
 import numpy as np
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QScrollArea,
                                QVBoxLayout, QWidget)
 
 from athletic_analysis.core import reference_pose
 from athletic_analysis.core.compare import StepComparison
 from athletic_analysis.ui import theme
+from athletic_analysis.ui.replay_clip import ReplayClip
 
 THUMB_H = 150
 
-
-def _to_pixmap(bgr: np.ndarray) -> QPixmap:
-    h, w = bgr.shape[:2]
-    scale = THUMB_H / h
-    small = cv2.resize(bgr, (max(1, int(w * scale)), THUMB_H))
-    rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-    image = QImage(rgb.data, rgb.shape[1], rgb.shape[0], 3 * rgb.shape[1],
-                   QImage.Format.Format_RGB888).copy()
-    return QPixmap.fromImage(image)
+# render_replay(center_frame) -> a short list of BGR frames around that
+# frame (main_window._render_keyframe_range with the fps-based half-window
+# already baked in) — the real-footage half of every comparison.
+RenderReplay = Callable[[int], list[np.ndarray]]
 
 
 def _fmt_value(value: float | None, unit: str) -> str:
@@ -40,19 +34,78 @@ def _fmt_value(value: float | None, unit: str) -> str:
     return f"{value:.2f} {unit}"
 
 
-class _ClickableImage(QLabel):
-    clicked = Signal()
+class ComparisonImages(QWidget):
+    """The reusable half of a comparison: the two (or one) ReplayClip sides
+    side by side, with captions. Used both by the Compare tab's gallery
+    cards below and inline by FormPanel's per-row expansion — one
+    implementation, two entry points, so "no critique without a visual"
+    holds wherever a fault is shown, not just in the dedicated tab."""
 
-    def mousePressEvent(self, event) -> None:
-        self.clicked.emit()
-        super().mousePressEvent(event)
+    frame_clicked = Signal(int)
+
+    def __init__(self, comparison: StepComparison, render_replay: RenderReplay,
+                parent=None):
+        super().__init__(parent)
+        f = comparison.finding
+        images = QHBoxLayout(self)
+        images.setContentsMargins(0, 0, 0, 0)
+
+        images.addWidget(self._real_side("Your form", f.frame, f.value_text,
+                                         render_replay, theme.SEVERITY_COLORS.get(
+                                             f.severity, theme.WARN)))
+        if comparison.best_frame is not None:
+            images.addWidget(self._real_side(
+                "Your best step", comparison.best_frame,
+                _fmt_value(comparison.best_value, comparison.check.unit),
+                render_replay, theme.GOOD))
+        elif comparison.posable:
+            target = (comparison.check.lo + comparison.check.hi) / 2
+            frames = reference_pose.render_sequence(f.key, target, "°")
+            images.addWidget(self._reference_side(frames, comparison.check))
+        else:
+            note = QLabel("No step in this clip pulled this one off, and it's a "
+                          "timing/distance check — there's no single pose to "
+                          "show as a reference.")
+            note.setWordWrap(True)
+            note.setStyleSheet(f"color: {theme.hexs(theme.TEXT_MUTED)}; font-size: 10px;")
+            images.addWidget(note, stretch=1)
+
+    def _real_side(self, caption: str, frame: int, value_text: str,
+                   render_replay: RenderReplay, border_color: theme.Rgb) -> QWidget:
+        wrap = QWidget()
+        box = QVBoxLayout(wrap)
+        box.setContentsMargins(0, 0, 0, 0)
+        clip = ReplayClip(border_color=border_color, height=THUMB_H, clickable=True)
+        clip.set_frames(render_replay(frame))
+        clip.clicked.connect(lambda fr=frame: self.frame_clicked.emit(fr))
+        box.addWidget(clip)
+        cap = QLabel(f"{caption}\n{value_text}")
+        cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cap.setStyleSheet("font-size: 10px;")
+        box.addWidget(cap)
+        return wrap
+
+    def _reference_side(self, frames: list[np.ndarray], check) -> QWidget:
+        wrap = QWidget()
+        box = QVBoxLayout(wrap)
+        box.setContentsMargins(0, 0, 0, 0)
+        clip = ReplayClip(border_color=theme.ACCENT, dashed=True, height=THUMB_H)
+        clip.set_frames(frames)
+        box.addWidget(clip)
+        lo_hi = f"{check.lo:.0f}–{check.hi:.0f}°" if check.unit == "deg" \
+            else f"{check.lo:.2f}–{check.hi:.2f} {check.unit}"
+        cap = QLabel(f"Reference (schematic)\noptimal {lo_hi}")
+        cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        cap.setStyleSheet("font-size: 10px;")
+        box.addWidget(cap)
+        return wrap
 
 
 class _CompareCard(QFrame):
     frame_clicked = Signal(int)
 
-    def __init__(self, comparison: StepComparison,
-                render_keyframe: Callable[[int], np.ndarray | None], parent=None):
+    def __init__(self, comparison: StepComparison, render_replay: RenderReplay,
+                parent=None):
         super().__init__(parent)
         self.setObjectName("card")
         f = comparison.finding
@@ -63,69 +116,14 @@ class _CompareCard(QFrame):
         title.setStyleSheet(f"font-weight: 600; color: {sev_color}; border: none;")
         outer.addWidget(title)
 
-        images = QHBoxLayout()
-        images.addWidget(self._real_side("Your form", f.frame, f.value_text,
-                                         render_keyframe, sev_color))
-        if comparison.best_frame is not None:
-            images.addWidget(self._real_side(
-                "Your best step", comparison.best_frame,
-                _fmt_value(comparison.best_value, comparison.check.unit),
-                render_keyframe, theme.hexs(theme.GOOD)))
-        elif comparison.posable:
-            target = (comparison.check.lo + comparison.check.hi) / 2
-            img = reference_pose.render(f.key, target, "°")
-            images.addWidget(self._reference_side(img, comparison.check))
-        else:
-            note = QLabel("No step in this clip pulled this one off, and it's a "
-                          "timing/distance check — there's no single pose to "
-                          "show as a reference.")
-            note.setWordWrap(True)
-            note.setStyleSheet(f"color: {theme.hexs(theme.TEXT_MUTED)}; font-size: 10px; border: none;")
-            images.addWidget(note, stretch=1)
-        outer.addLayout(images)
+        images = ComparisonImages(comparison, render_replay)
+        images.frame_clicked.connect(self.frame_clicked)
+        outer.addWidget(images)
 
         cue = QLabel(f.cue)
         cue.setWordWrap(True)
         cue.setStyleSheet(f"color: {theme.hexs(theme.TEXT_MUTED)}; font-size: 11px; border: none;")
         outer.addWidget(cue)
-
-    def _real_side(self, caption: str, frame: int, value_text: str,
-                   render_keyframe: Callable[[int], np.ndarray | None],
-                   border_color: str) -> QWidget:
-        wrap = QWidget()
-        box = QVBoxLayout(wrap)
-        box.setContentsMargins(0, 0, 0, 0)
-        bgr = render_keyframe(frame)
-        img = _ClickableImage()
-        img.setCursor(Qt.CursorShape.PointingHandCursor)
-        img.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        if bgr is not None:
-            img.setPixmap(_to_pixmap(bgr))
-        img.setStyleSheet(f"border: 2px solid {border_color}; border-radius: 6px;")
-        img.clicked.connect(lambda fr=frame: self.frame_clicked.emit(fr))
-        box.addWidget(img)
-        cap = QLabel(f"{caption}\n{value_text}")
-        cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cap.setStyleSheet("font-size: 10px; border: none;")
-        box.addWidget(cap)
-        return wrap
-
-    def _reference_side(self, bgr: np.ndarray, check) -> QWidget:
-        wrap = QWidget()
-        box = QVBoxLayout(wrap)
-        box.setContentsMargins(0, 0, 0, 0)
-        img = QLabel()
-        img.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        img.setPixmap(_to_pixmap(bgr))
-        img.setStyleSheet(f"border: 2px dashed {theme.hexs(theme.ACCENT)}; border-radius: 6px;")
-        box.addWidget(img)
-        lo_hi = f"{check.lo:.0f}–{check.hi:.0f}°" if check.unit == "deg" \
-            else f"{check.lo:.2f}–{check.hi:.2f} {check.unit}"
-        cap = QLabel(f"Reference (schematic)\noptimal {lo_hi}")
-        cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cap.setStyleSheet("font-size: 10px; border: none;")
-        box.addWidget(cap)
-        return wrap
 
 
 class ComparePanel(QWidget):
@@ -136,9 +134,9 @@ class ComparePanel(QWidget):
 
     frame_requested = Signal(int)
 
-    def __init__(self, render_keyframe: Callable[[int], np.ndarray | None], parent=None):
+    def __init__(self, render_replay: RenderReplay, parent=None):
         super().__init__(parent)
-        self._render_keyframe = render_keyframe
+        self._render_replay = render_replay
         outer = QVBoxLayout(self)
 
         self._empty = QLabel("Run pose analysis on a sprint clip to compare your "
@@ -171,7 +169,7 @@ class ComparePanel(QWidget):
         self._empty.hide()
         self._scroll.show()
         for comparison in comparisons:
-            card = _CompareCard(comparison, self._render_keyframe)
+            card = _CompareCard(comparison, self._render_replay)
             card.frame_clicked.connect(self.frame_requested.emit)
             self._inner_layout.insertWidget(self._inner_layout.count() - 1, card)
             self._cards.append(card)

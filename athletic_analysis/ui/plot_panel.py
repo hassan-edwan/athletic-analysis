@@ -40,6 +40,37 @@ _PRESETS: dict[str, set[str] | None] = {
     "Posture": {"trunk_lean", "thigh_l", "thigh_r"},
     "Custom": None,
 }
+_PRESET_CAPTIONS = {
+    "Speed": "The two clearest markers of top-end running speed.",
+    "Ground contact": "How the legs behave right around each foot strike.",
+    "Posture": "Trunk and thigh angles — the shape of your upper body and "
+               "front-side mechanics.",
+    "Custom": "Pick any combination of curves below.",
+}
+
+# One line per curve — what it's showing, not a verdict on it (that's what
+# the phase target bands drawn by set_phases() are for). Reused as each
+# checkbox's tooltip so a curve name is never the only explanation offered.
+_SERIES_HELP = {
+    "knee_l": "Left knee angle over time — sharpest dips happen at ground contact.",
+    "knee_r": "Right knee angle over time — sharpest dips happen at ground contact.",
+    "hip_l": "Left hip angle (trunk-to-thigh) over time.",
+    "hip_r": "Right hip angle (trunk-to-thigh) over time.",
+    "ankle_l": "Left ankle angle over time — shows push-off timing.",
+    "ankle_r": "Right ankle angle over time — shows push-off timing.",
+    "trunk_lean": "How far forward your torso tips, over time — a big lean "
+                  "out of the start, close to upright at top speed.",
+    "thigh_l": "Left thigh angle vs. vertical over time — how high the "
+               "knee drives at each instant.",
+    "thigh_r": "Right thigh angle vs. vertical over time — how high the "
+               "knee drives at each instant.",
+    "run_speed": "Your ~0.4 s-smoothed running speed — the clearest single "
+                 "curve for seeing where in the rep you were fastest.",
+    "hip_speed": "Raw hip speed — noisier than run speed, useful for "
+                 "spotting individual bursts.",
+    "hip_vx": "Horizontal hip velocity — the raw component run speed is built from.",
+    "hip_vy": "Vertical hip velocity — bounce/oscillation in your stride.",
+}
 
 
 class PlotPanel(QWidget):
@@ -71,11 +102,17 @@ class PlotPanel(QWidget):
         for key, label, _color, _vel in _SERIES:
             cb = QCheckBox(label)
             cb.setChecked(key in _DEFAULT_ON)
+            cb.setToolTip(_SERIES_HELP.get(key, ""))
             cb.toggled.connect(self._on_check_toggled)
             self._checks[key] = cb
             checks.addWidget(cb)
         checks.addStretch(1)
         layout.addLayout(checks)
+
+        self._preset_caption = QLabel(_PRESET_CAPTIONS["Custom"])
+        self._preset_caption.setStyleSheet(
+            f"color: {theme.hexs(theme.TEXT_MUTED)}; font-size: 10px;")
+        layout.addWidget(self._preset_caption)
 
         self._plot = pg.PlotWidget()
         item = self._plot.getPlotItem()
@@ -210,6 +247,7 @@ class PlotPanel(QWidget):
         self._refresh_visibility()
 
     def _apply_preset(self, name: str) -> None:
+        self._preset_caption.setText(_PRESET_CAPTIONS.get(name, ""))
         wanted = _PRESETS.get(name)
         if wanted is None:  # Custom: leave checkboxes as they are
             return
@@ -225,6 +263,7 @@ class PlotPanel(QWidget):
             self._preset_combo.blockSignals(True)
             self._preset_combo.setCurrentText("Custom")
             self._preset_combo.blockSignals(False)
+            self._preset_caption.setText(_PRESET_CAPTIONS["Custom"])
         self._refresh_visibility()
 
     def zoom_to_frames(self, f0: int, f1: int) -> None:

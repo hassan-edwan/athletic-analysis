@@ -18,7 +18,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QLabel, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 
-from athletic_analysis.core.coaching import PhaseBucket, _evaluate, sprint_checks
+from athletic_analysis.core.coaching import (PhaseBucket, _evaluate,
+                                             metric_help, sprint_checks)
 from athletic_analysis.core.metrics.jump import JumpMetrics
 from athletic_analysis.core.metrics.sprint import SprintMetrics, StepRecord
 from athletic_analysis.ui import theme
@@ -31,6 +32,24 @@ _CHECKED_COLUMNS: dict[int, tuple[str, Callable[[StepRecord], float]]] = {
     7: ("thigh", lambda s: s.swing_thigh_angle),
     8: ("trunk", lambda s: s.trunk_lean_at_strike),
 }
+
+# Column index -> metric_help() key, for header tooltips. Columns without an
+# entry (Side, Strike, Step len, Speed) aren't coaching-check metrics, so
+# they get no tooltip rather than a made-up one.
+_HEADER_HELP_KEY = {2: "contact_ms", 6: "knee_strike", 7: "thigh", 8: "trunk"}
+
+# Nine flat columns read as noise; naming the three groups they fall into
+# (identity / timing & kinematics / posture) does the same job "group the
+# columns" was meant to. A per-column header background tint was tried
+# first and dropped: QTableWidgetItem.setBackground() on a header item is
+# unrenderable once theme.py's app-wide QSS gives QHeaderView::section a
+# solid background — confirmed with an isolated repro (a bare QTableWidget,
+# one header item painted pure red, still invisible), not just a styling
+# nuance to tune further.
+_GROUPS_CAPTION = (
+    "Columns: Side, Strike (identity) · Contact ms, Flight ms, Step len, "
+    "Speed (timing & kinematics) · Knee@strike, Swing thigh, Trunk (posture "
+    "checks, hover for what each measures).")
 
 
 def _fmt(value: float, decimals: int = 2, suffix: str = "") -> str:
@@ -53,11 +72,17 @@ class MetricsPanel(QWidget):
             f"Tinted cells: <span style='color:{theme.hexs(theme.GOOD)}'>in range</span> · "
             f"<span style='color:{theme.hexs(theme.WARN)}'>minor</span> · "
             f"<span style='color:{theme.hexs(theme.BAD)}'>major</span> deviation for "
-            "that step's own phase.")
+            "that step's own phase — the number in parentheses is the "
+            "optimal range. Hover a column header for what it measures.")
         self._legend.setTextFormat(Qt.TextFormat.RichText)
+        self._legend.setWordWrap(True)
         self._legend.setStyleSheet("font-size: 10px;")
-        self._legend.hide()
         layout.addWidget(self._legend)
+        self._groups_caption = QLabel(_GROUPS_CAPTION)
+        self._groups_caption.setWordWrap(True)
+        self._groups_caption.setStyleSheet(
+            f"font-size: 10px; color: {theme.hexs(theme.TEXT_MUTED)};")
+        layout.addWidget(self._groups_caption)
         self._table = QTableWidget()
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.cellClicked.connect(self._on_cell_clicked)
@@ -100,12 +125,13 @@ class MetricsPanel(QWidget):
                    "Knee@strike °", "Swing thigh °", "Trunk °"]
         self._table.setColumnCount(len(headers))
         self._table.setHorizontalHeaderLabels(headers)
+        self._style_headers()
         self._table.setRowCount(len(m.steps))
         self._row_frames = [s.strike_frame for s in m.steps]
 
         frame_phase = self._frame_phase(buckets) if buckets else {}
         checks_by_phase = sprint_checks(level) if buckets else {}
-        self._legend.setVisible(bool(buckets))
+        self._legend.show()
 
         for r, step in enumerate(m.steps):
             cells = [
@@ -118,7 +144,6 @@ class MetricsPanel(QWidget):
             phase = frame_phase.get(step.strike_frame)
             checks = dict(checks_by_phase.get(phase, [])) if phase else {}
             for c, text in enumerate(cells):
-                item = QTableWidgetItem(text)
                 key_getter = _CHECKED_COLUMNS.get(c)
                 if key_getter is not None and phase is not None:
                     key, getter = key_getter
@@ -126,12 +151,27 @@ class MetricsPanel(QWidget):
                     if check is not None:
                         finding = _evaluate(check, getter(step), phase, step.strike_frame)
                         if finding is not None:
+                            item = QTableWidgetItem(f"{text} ({finding.target_text})")
                             item.setBackground(theme.qcolor(
                                 theme.SEVERITY_COLORS[finding.severity], 55))
                             item.setToolTip(f"{finding.metric} ({phase}): optimal "
                                             f"{finding.target_text}")
-                self._table.setItem(r, c, item)
+                            self._table.setItem(r, c, item)
+                            continue
+                self._table.setItem(r, c, QTableWidgetItem(text))
         self._table.resizeColumnsToContents()
+
+    def _style_headers(self) -> None:
+        """Attach a plain-language tooltip to the columns that are actually
+        coaching checks (see _GROUPS_CAPTION's docstring for why this isn't
+        also a per-column background tint)."""
+        for c in range(self._table.columnCount()):
+            item = self._table.horizontalHeaderItem(c)
+            if item is None:
+                continue
+            help_key = _HEADER_HELP_KEY.get(c)
+            if help_key:
+                item.setToolTip(metric_help(help_key))
 
     def show_jump(self, m: JumpMetrics | None) -> None:
         self._table.clear()
