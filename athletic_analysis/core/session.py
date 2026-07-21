@@ -20,7 +20,8 @@ from athletic_analysis.core.coaching import (FormFinding, analyze_jump_form,
                                              analyze_sprint_form)
 from athletic_analysis.core.confidence import ClipQuality, clip_quality
 from athletic_analysis.core.events import (GaitEvent, JumpPhases,
-                                           detect_gait_events, detect_jump)
+                                           detect_gait_events, detect_jump,
+                                           gait_event_anomalies)
 from athletic_analysis.core.filtering import smooth_keypoints
 from athletic_analysis.core.metrics.jump import JumpMetrics, compute_jump_metrics
 from athletic_analysis.core.metrics.sprint import SprintMetrics, compute_sprint_metrics
@@ -94,6 +95,8 @@ class AnalysisSession:
             self.keypoints, self.fps, self.calibration is not None,
             mean_plausibility=self.tracking.mean_plausibility,
             view=self.view.view)
+        if self.mode == "sprint":
+            self.quality.notes.extend(gait_event_anomalies(self.gait_events, self.fps))
 
     # --- persistence -------------------------------------------------------
 

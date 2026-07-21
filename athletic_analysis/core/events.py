@@ -170,6 +170,50 @@ def detect_gait_events(kpts: np.ndarray, fps: float) -> list[GaitEvent]:
     return events
 
 
+def gait_event_anomalies(events: list[GaitEvent], fps: float) -> list[str]:
+    """Cheap sanity flags on the *detected* events (not a re-detection): a
+    running gait alternates feet with fairly regular step intervals and
+    physiologically bounded ground contacts, so violations point at a missed
+    or doubled strike. Returned as short human notes for the quality badge —
+    detection itself is left unchanged (a full detector rewrite would ripple
+    into every metric and the iOS parity fixtures; this just says 'the timeline
+    here looks off, eyeball it')."""
+    strikes = [ev for ev in events if ev.kind == "strike"]
+    notes: list[str] = []
+    if len(strikes) < 3:
+        return notes
+
+    # 1) Feet should alternate; two same-side strikes in a row => a missed one.
+    same_side = sum(1 for a, b in zip(strikes, strikes[1:]) if a.side == b.side)
+    if same_side:
+        notes.append(f"{same_side} step(s) don't alternate feet — a strike may "
+                     "be missed or doubled")
+
+    # 2) Step intervals should be roughly regular; big outliers => missed/doubled.
+    intervals = np.diff([s.frame for s in strikes])
+    if len(intervals) >= 3:
+        med = float(np.median(intervals))
+        if med > 0:
+            irregular = int(np.sum((intervals > 1.8 * med) | (intervals < 0.55 * med)))
+            if irregular:
+                notes.append(f"{irregular} step interval(s) look irregular "
+                             "(possible missed/doubled strike)")
+
+    # 3) Ground contacts should sit within a plausible band (~40-400 ms).
+    odd_contacts = 0
+    for s in strikes:
+        toeoff = next((ev for ev in events if ev.kind == "toeoff"
+                       and ev.side == s.side and ev.frame > s.frame), None)
+        if toeoff:
+            c = (toeoff.frame - s.frame) / fps
+            if c < 0.04 or c > 0.40:
+                odd_contacts += 1
+    if odd_contacts:
+        notes.append(f"{odd_contacts} ground contact(s) outside the usual "
+                     "40-400 ms range")
+    return notes
+
+
 def detect_jump(kpts: np.ndarray, fps: float,
                 min_flight_s: float = 0.15) -> JumpPhases | None:
     """Find the main jump: the airborne interval (both feet off ground) with the

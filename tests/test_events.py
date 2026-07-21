@@ -1,7 +1,8 @@
 import numpy as np
 
-from athletic_analysis.core.events import (contact_mask, contact_threshold,
-                                           detect_gait_events, detect_jump,
+from athletic_analysis.core.events import (GaitEvent, contact_mask,
+                                           contact_threshold, detect_gait_events,
+                                           detect_jump, gait_event_anomalies,
                                            refine_event_time)
 from athletic_analysis.core.pose.skeleton import KP
 from tests.conftest import make_sequence
@@ -112,3 +113,25 @@ def test_refine_event_time_recovers_known_subframe_crossing():
 def test_refine_event_time_falls_back_on_flat_foot():
     flat = np.full(50, 600.0)  # foot never moves -> no threshold
     assert refine_event_time(flat, 20, "strike") == 20.0
+
+
+def _strike_run(frames_sides, contact=12):
+    ev = []
+    for f, side in frames_sides:
+        ev.append(GaitEvent(frame=f, side=side, kind="strike"))
+        ev.append(GaitEvent(frame=f + contact, side=side, kind="toeoff"))
+    return sorted(ev, key=lambda e: e.frame)
+
+
+def test_gait_event_anomalies_clean_run_is_silent():
+    clean = _strike_run([(25, "left"), (50, "right"), (75, "left"),
+                         (100, "right"), (125, "left")])
+    assert gait_event_anomalies(clean, 100.0) == []
+
+
+def test_gait_event_anomalies_flags_broken_alternation_and_gap():
+    # A missed right strike: left, left (no alternation) with a doubled interval.
+    broken = _strike_run([(25, "left"), (50, "left"), (100, "right"),
+                          (125, "left")])
+    notes = gait_event_anomalies(broken, 100.0)
+    assert any("alternate" in n for n in notes)
