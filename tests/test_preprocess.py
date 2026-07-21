@@ -2,7 +2,26 @@ import numpy as np
 
 from athletic_analysis.core.preprocess import (Preprocessor, ReframeTracker,
                                                comb_metric, deinterlace,
-                                               enhance_contrast, rotate_frame)
+                                               enhance_contrast, keypoints_bbox,
+                                               rotate_frame)
+
+
+def test_keypoints_bbox_encloses_confident_points_only():
+    kp = np.zeros((26, 3))
+    kp[0] = (10.0, 20.0, 0.9)
+    kp[1] = (50.0, 80.0, 0.8)
+    kp[2] = (200.0, 200.0, 0.1)  # low confidence, must be excluded
+    box = keypoints_bbox(kp)
+    assert np.array_equal(box, [10.0, 20.0, 50.0, 80.0])
+
+
+def test_keypoints_bbox_none_when_too_few_confident():
+    all_low = np.zeros((26, 3))
+    all_low[:, 2] = 0.1
+    assert keypoints_bbox(all_low) is None
+    only_one = np.zeros((26, 3))
+    only_one[0] = (5.0, 5.0, 0.9)
+    assert keypoints_bbox(only_one) is None
 
 
 def _low_contrast_frame():

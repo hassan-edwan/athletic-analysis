@@ -16,7 +16,23 @@ from typing import Callable
 import cv2
 import numpy as np
 
+from athletic_analysis.core.angles import MIN_CONF
+
 # --- simple pixel transforms --------------------------------------------------
+
+
+def keypoints_bbox(kpts: np.ndarray, min_conf: float = MIN_CONF
+                   ) -> np.ndarray | None:
+    """[x1, y1, x2, y2] enclosing the confidently-tracked keypoints in one
+    frame's (26, 3) array, or None when fewer than two are confident (too
+    few to form a sane box). Used to derive a ReframeTracker trajectory
+    straight from pose output, without a separate detector pass."""
+    good = kpts[:, 2] >= min_conf
+    if int(good.sum()) < 2:
+        return None
+    pts = kpts[good, :2]
+    return np.array([pts[:, 0].min(), pts[:, 1].min(),
+                     pts[:, 0].max(), pts[:, 1].max()])
 
 
 def rotate_frame(frame: np.ndarray, degrees: int) -> np.ndarray:

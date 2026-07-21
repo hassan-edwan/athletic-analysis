@@ -23,7 +23,9 @@ from athletic_analysis.ui import theme
 DEFAULT_FPS = 8
 
 
-def _to_pixmap(bgr: np.ndarray) -> QPixmap:
+def to_pixmap(bgr: np.ndarray) -> QPixmap:
+    """BGR ndarray -> QPixmap. Public because both this widget and the
+    Compare-tab scrubber preview need it."""
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     h, w, _ = rgb.shape
     image = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
@@ -36,12 +38,14 @@ class ReplayClip(QWidget):
     Optionally clickable — real-footage replays emit `clicked` so a caller
     can seek the main video to this clip's center frame; the synthetic
     reference clip typically leaves this unconnected since it has no real
-    frame to seek to."""
+    frame to seek to. An optional `caption` draws a small dark pill badge in
+    the bottom-left corner, on top of the frame."""
 
     clicked = Signal()
 
     def __init__(self, border_color: theme.Rgb = theme.ACCENT, dashed: bool = False,
-                height: int = 160, clickable: bool = False, parent=None):
+                height: int = 160, clickable: bool = False,
+                caption: str | None = None, parent=None):
         super().__init__(parent)
         self._height = height
         layout = QVBoxLayout(self)
@@ -57,6 +61,19 @@ class ReplayClip(QWidget):
             self._image.setCursor(Qt.CursorShape.PointingHandCursor)
         layout.addWidget(self._image)
 
+        # A caption parented directly onto the image label paints on top of it
+        # (no layout), with a fixed dark-translucent fill so it stays legible
+        # over any frame content — theme.make_chip's color-keyed fill would
+        # not. Repositioned in _reposition_caption() once the image has a size.
+        self._caption: QLabel | None = None
+        if caption:
+            self._caption = QLabel(caption, self._image)
+            self._caption.setStyleSheet(
+                "background: rgba(10, 10, 12, 180); color: #e2e3e6; "
+                "border-radius: 6px; padding: 1px 6px; font-size: 10px; "
+                "font-weight: 600;")
+            self._caption.adjustSize()
+
         self._clickable = clickable
         self._pixmaps: list[QPixmap] = []
         self._index = 0
@@ -70,20 +87,35 @@ class ReplayClip(QWidget):
 
     def set_frames(self, frames: list[np.ndarray], fps: int = DEFAULT_FPS) -> None:
         self._timer.stop()
-        self._pixmaps = [_to_pixmap(f) for f in frames]
+        self._pixmaps = [to_pixmap(f) for f in frames]
         self._index = 0
         if not self._pixmaps:
             self._image.setPixmap(QPixmap())
             self._image.setText("no frames available")
+            self._image.setMinimumWidth(120)
             return
         self._show_current()
         if len(self._pixmaps) > 1:
             self._timer.start(max(1, round(1000 / fps)))
 
     def _show_current(self) -> None:
-        pix = self._pixmaps[self._index]
-        self._image.setPixmap(pix.scaledToHeight(
-            self._height, Qt.TransformationMode.SmoothTransformation))
+        pix = self._pixmaps[self._index].scaledToHeight(
+            self._height, Qt.TransformationMode.SmoothTransformation)
+        self._image.setPixmap(pix)
+        # Lock the label to the pixmap's real size so QHBoxLayout can't
+        # stretch the frame across empty space — the "box wider than the
+        # picture" complaint.
+        self._image.setFixedSize(pix.size())
+        self._reposition_caption()
+
+    def _reposition_caption(self) -> None:
+        if self._caption is None:
+            return
+        self._caption.adjustSize()
+        margin = 6
+        self._caption.move(margin,
+                           self._image.height() - self._caption.height() - margin)
+        self._caption.raise_()
 
     def _advance(self) -> None:
         if not self._pixmaps:

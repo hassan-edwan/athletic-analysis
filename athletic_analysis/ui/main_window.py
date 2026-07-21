@@ -23,7 +23,8 @@ from athletic_analysis.core.session import AnalysisSession
 from athletic_analysis.core.video_source import VideoSource
 from athletic_analysis.export.csv_export import export_frames_csv, export_metrics_csv
 from athletic_analysis.export.video_export import export_annotated_video
-from athletic_analysis.core.preprocess import Preprocessor
+from athletic_analysis.core.preprocess import (Preprocessor, ReframeTracker,
+                                               keypoints_bbox)
 from athletic_analysis.ui import theme
 from athletic_analysis.ui.analysis_worker import AnalysisWorker
 from athletic_analysis.ui.assessment_worker import AssessmentWorker
@@ -64,6 +65,11 @@ class MainWindow(QMainWindow):
         self.source: VideoSource | None = None
         self.session: AnalysisSession | None = None
         self.current_frame = 0
+        # One athlete-tracking crop trajectory for the whole clip, rebuilt
+        # whenever the session's pose data changes; shared by the Compare-tab
+        # scrubber and the Form-tab replay so both frame the athlete, not the
+        # whole (often wide) shot.
+        self._replay_tracker: ReframeTracker | None = None
         self._worker: AnalysisWorker | None = None
         self._assessor: AssessmentWorker | None = None
         self._pick_points: list[tuple[float, float]] = []
@@ -92,7 +98,7 @@ class MainWindow(QMainWindow):
         self.suitability_panel = SuitabilityPanel()
         self.rep_card = RepCard()
         self.form_panel = FormPanel(self._render_replay)
-        self.compare_panel = ComparePanel(self._render_replay)
+        self.compare_panel = ComparePanel(self._render_replay_frame)
         self.step_charts = StepCharts()
         self.keyframe_strip = KeyframeStrip()
         self.plot_panel = PlotPanel()
@@ -231,6 +237,7 @@ class MainWindow(QMainWindow):
             self.source.close()
         self.source = source
         self.timeline.set_frame_count(source.frame_count)
+        self.compare_panel.set_frame_count(source.frame_count)
         self.session = session or AnalysisSession(video_path=path, fps=source.fps)
         self.session.rotation = rotation
         idx = self.mode_combo.findData(self.session.mode)
@@ -290,6 +297,7 @@ class MainWindow(QMainWindow):
         if self.session:
             self.session.rotation = degrees
         self.timeline.set_frame_count(self.source.frame_count)
+        self.compare_panel.set_frame_count(self.source.frame_count)
         self.seek(min(self.current_frame, self.source.frame_count - 1))
         self.statusBar().showMessage(f"Rotated {degrees}° for correct orientation.")
 
@@ -395,6 +403,7 @@ class MainWindow(QMainWindow):
         if self.source and len(keypoints) < self.source.frame_count:
             self.source.frame_count = len(keypoints)
             self.timeline.set_frame_count(len(keypoints))
+            self.compare_panel.set_frame_count(len(keypoints))
         self.session.recompute()
         try:
             self.session.save()
@@ -419,6 +428,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_analysis_views(self) -> None:
         s = self.session
+        self._rebuild_replay_tracker()
         if not s or not s.has_pose:
             self.timeline.set_markers([])
             self.timeline.set_phases([])
@@ -518,12 +528,36 @@ class MainWindow(QMainWindow):
             draw_pose(image, s.keypoints[frame])
         return image
 
+    def _rebuild_replay_tracker(self) -> None:
+        """One whole-session ReframeTracker keyed off the pose keypoints (no
+        detector needed — pose already exists by the time replays are shown).
+        A whole-clip smoothed trajectory holds the 'camera' near-static across
+        any short sub-window, so no separate static-box logic is required."""
+        s, src = self.session, self.source
+        if s is None or src is None or s.keypoints is None or len(s.keypoints) == 0:
+            self._replay_tracker = None
+            return
+        boxes = [keypoints_bbox(kp) for kp in s.keypoints]
+        self._replay_tracker = ReframeTracker(boxes=boxes, frame_w=src.width,
+                                              frame_h=src.height)
+
+    def _render_replay_frame(self, frame: int) -> np.ndarray | None:
+        """A single pose-drawn frame cropped to the athlete via the shared
+        replay tracker — the frame source for both the Compare-tab scrubber
+        preview and the Form-tab replay clips. Falls back to the full frame
+        when there's no tracker (e.g. no pose yet)."""
+        img = self._render_keyframe(frame)
+        if img is None or self._replay_tracker is None:
+            return img
+        cropped, _ = self._replay_tracker.crop_and_map(img, frame)
+        return cropped
+
     def _render_keyframe_range(self, center_frame: int, half_window_frames: int,
                                max_frames: int = 16) -> list[np.ndarray]:
-        """Every rendered frame in [center - half_window, center + half_window],
-        subsampled to at most `max_frames` — a replay clip is meant to be a
+        """Every cropped replay frame in [center - half_window, center +
+        half_window], subsampled to at most `max_frames` — a replay clip is a
         short, slow-motion loop, not a full re-decode of a high-fps clip's
-        worth of frames every time a comparison card is built."""
+        worth of frames every time a comparison is built."""
         if not self.source:
             return []
         lo = max(0, center_frame - half_window_frames)
@@ -536,15 +570,15 @@ class MainWindow(QMainWindow):
             picked = [frames[round(i)] for i in idx]
             seen: set[int] = set()
             frames = [f for f in picked if not (f in seen or seen.add(f))]
-        return [img for f in frames if (img := self._render_keyframe(f)) is not None]
+        return [img for f in frames if (img := self._render_replay_frame(f)) is not None]
 
     def _render_replay(self, center_frame: int) -> list[np.ndarray]:
-        """A ~0.5 s-either-side replay clip around `center_frame` — the
-        real-footage half of every ComparePanel/FormPanel visual comparison.
-        Bundled here (rather than passing fps around) since only
-        main_window knows the clip's fps."""
+        """A ~0.4 s-either-side replay clip around `center_frame` — the
+        real-footage half of the Form tab's inline comparison. Tight enough
+        to stay on the flagged moment (checks are measured at a foot-strike
+        instant) rather than wandering into approach/recovery motion."""
         fps = self.source.fps if self.source else 30.0
-        return self._render_keyframe_range(center_frame, round(0.5 * fps))
+        return self._render_keyframe_range(center_frame, round(0.2 * fps))
 
     def _on_mode_changed(self) -> None:
         if self.session:
