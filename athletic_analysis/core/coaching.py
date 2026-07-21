@@ -477,7 +477,11 @@ _METRIC_JOINTS = {
 
 def analyze_sprint_form(kpts: np.ndarray, sprint: SprintMetrics | None,
                         velocities: dict[str, np.ndarray], fps: float,
-                        level: str = "trained") -> list[FormFinding]:
+                        level: str = "trained",
+                        plausibility: np.ndarray | None = None) -> list[FormFinding]:
+    """`plausibility` (per-frame rigid-bone consistency, from
+    quality.tracking_quality) optionally downgrades findings read from
+    mistracked frames."""
     if sprint is None or not sprint.steps:
         return []
     checks_by_phase = sprint_checks(level)
@@ -495,8 +499,13 @@ def analyze_sprint_form(kpts: np.ndarray, sprint: SprintMetrics | None,
         elif key == "cadence":
             sf = bucket.step_frames
             spanned = float(np.median(sf)) if sf else 0.0
+        plaus = None
+        if plausibility is not None and strikes:
+            valid = [f for f in strikes if 0 <= f < len(plausibility)]
+            if valid:
+                plaus = float(np.mean(plausibility[valid]))
         return metric_confidence(detection=detection, frames_spanned=spanned,
-                                 n_samples=len(strikes))
+                                 n_samples=len(strikes), plausibility=plaus)
 
     findings: list[FormFinding] = []
     for phase in ("drive", "acceleration", "max velocity"):
@@ -524,9 +533,18 @@ _JUMP_METRIC_JOINTS = {
 }
 
 
+# Metrics whose validity depends on the filming plane. The knee/ankle
+# separation ratio is a *frontal*-plane valgus proxy — meaningless from a
+# side view, where left/right ankles project onto nearly the same x.
+_FRONTAL_ONLY_JUMP = {"knee_ankle_sep_ratio_landing"}
+
+
 def analyze_jump_form(jump: JumpMetrics | None, kpts: np.ndarray | None = None,
-                      fps: float = 30.0, level: str = "trained"
-                      ) -> list[FormFinding]:
+                      fps: float = 30.0, level: str = "trained",
+                      view: str | None = None) -> list[FormFinding]:
+    """`view` ("sagittal"/"frontal"/"oblique") gates plane-dependent checks:
+    the frontal knee-valgus proxy is dropped to Low confidence off a front
+    view rather than presenting a side-view artifact as a real finding."""
     if jump is None or jump.takeoff_frame < 0:
         return []
     findings: list[FormFinding] = []
@@ -538,6 +556,8 @@ def analyze_jump_form(jump: JumpMetrics | None, kpts: np.ndarray | None = None,
             detection = detection_factor(kpts, _JUMP_METRIC_JOINTS[attr], [frame])
         uncal = (check.unit in ("BH",) and attr == "countermovement_depth")
         conf = metric_confidence(detection=detection, uncalibrated_distance=uncal)
+        if attr in _FRONTAL_ONLY_JUMP and view is not None and view != "frontal":
+            conf = MetricConfidence(min(conf.score, 0.4), "Low", "side view")
         finding = _evaluate(check, value, "jump", frame, conf, key=attr)
         if finding is not None:
             findings.append(finding)

@@ -118,6 +118,28 @@ def test_knee_valgus_flagged():
     assert "valgus" in valgus.cue.lower() or "caving" in valgus.cue.lower()
 
 
+def test_valgus_confidence_gated_by_view():
+    m = _jump_metrics(knee_ankle_sep_ratio_landing=0.55)
+    side = next(f for f in analyze_jump_form(m, view="sagittal")
+                if "separation" in f.metric.lower())
+    front = next(f for f in analyze_jump_form(m, view="frontal")
+                 if "separation" in f.metric.lower())
+    # The frontal-plane valgus proxy is untrustworthy from a side view.
+    assert side.confidence.level == "Low"
+    assert side.confidence.limiter == "side view"
+    assert front.confidence.limiter != "side view"
+
+
+def test_sprint_form_plausibility_downgrades_findings():
+    kpts, metrics, vel = _sprint_setup(trunk=30.0)
+    clean = analyze_sprint_form(kpts, metrics, vel, FPS)
+    bad_plaus = np.full(len(kpts), 0.3)
+    noisy = analyze_sprint_form(kpts, metrics, vel, FPS, plausibility=bad_plaus)
+    c = next(f for f in clean if f.metric == "Trunk lean").confidence
+    n = next(f for f in noisy if f.metric == "Trunk lean").confidence
+    assert n.score < c.score
+
+
 def test_summary_counts():
     findings = analyze_jump_form(_jump_metrics(peak_knee_flexion_landing=155.0))
     text = summarize(findings)

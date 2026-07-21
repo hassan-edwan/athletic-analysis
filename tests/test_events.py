@@ -1,7 +1,8 @@
 import numpy as np
 
-from athletic_analysis.core.events import (contact_mask, detect_gait_events,
-                                           detect_jump)
+from athletic_analysis.core.events import (contact_mask, contact_threshold,
+                                           detect_gait_events, detect_jump,
+                                           refine_event_time)
 from athletic_analysis.core.pose.skeleton import KP
 from tests.conftest import make_sequence
 
@@ -83,3 +84,31 @@ def test_detect_jump():
 def test_detect_jump_none_when_standing():
     kpts = make_sequence(200)
     assert detect_jump(kpts, FPS) is None
+
+
+def test_refine_event_time_recovers_known_subframe_crossing():
+    # A foot descending linearly from 500 (air) to 700 (ground) crosses any
+    # threshold at a precise sub-frame point. contact_threshold uses the 90th
+    # percentile minus 15% of amplitude; place a descent so the true crossing
+    # falls between integer frames and confirm we recover it.
+    y = np.concatenate([np.full(10, 500.0),                 # airborne plateau
+                        np.linspace(500.0, 700.0, 11),      # descent (frames 10-20)
+                        np.full(10, 700.0)])                # ground plateau
+    band = 0.05
+    thr = contact_threshold(y, band)
+    assert thr is not None
+    # The integer strike is the first frame at/above threshold; the fractional
+    # time must be earlier (the crossing happened mid-descent) and land where
+    # the line actually crosses `thr`.
+    mask = contact_mask(y, FPS)
+    strike_frame = int(np.argmax(mask))
+    t = refine_event_time(y, strike_frame, "strike", band)
+    # Reconstruct the exact crossing on the descent segment (slope 20 px/frame).
+    exact = 10 + (thr - 500.0) / 20.0
+    assert abs(t - exact) < 0.6
+    assert t <= strike_frame  # sub-frame time is never after the integer frame
+
+
+def test_refine_event_time_falls_back_on_flat_foot():
+    flat = np.full(50, 600.0)  # foot never moves -> no threshold
+    assert refine_event_time(flat, 20, "strike") == 20.0

@@ -15,6 +15,29 @@ def test_temporal_factor_fps_matters_for_fixed_contact():
     assert high == 1.0
 
 
+def test_low_plausibility_downgrades_and_names_the_limiter():
+    good = metric_confidence(detection=0.95, n_samples=6, plausibility=0.98)
+    noisy = metric_confidence(detection=0.95, n_samples=6, plausibility=0.45)
+    assert noisy.score < good.score
+    assert noisy.level in ("Medium", "Low")
+    assert noisy.limiter == "tracking noise"
+
+
+def test_plausibility_omitted_is_unchanged():
+    with_none = metric_confidence(detection=0.9, n_samples=6)
+    explicit = metric_confidence(detection=0.9, n_samples=6, plausibility=None)
+    assert with_none.score == explicit.score
+
+
+def test_clip_quality_notes_mistracking_and_view():
+    kpts = make_sequence(60)
+    q = clip_quality(kpts, 60.0, calibrated=True,
+                     mean_plausibility=0.7, view="frontal")
+    joined = " ".join(q.notes)
+    assert "mistracked" in joined
+    assert "frontal" in joined
+
+
 def test_temporal_factor_bounds():
     assert temporal_factor(0) == 0.4
     assert temporal_factor(float("nan")) == 0.4

@@ -87,13 +87,20 @@ _F_DETECT = "joint tracking"
 _F_TIME = "frame rate"
 _F_SAMPLE = "few steps"
 _F_CALIB = "not calibrated"
+_F_PLAUSIBLE = "tracking noise"
 
 
 def metric_confidence(*, detection: float | None = None,
                       frames_spanned: float | None = None,
                       n_samples: int | None = None,
+                      plausibility: float | None = None,
                       uncalibrated_distance: bool = False) -> MetricConfidence:
-    """Assemble a metric's confidence from whichever signals apply."""
+    """Assemble a metric's confidence from whichever signals apply.
+
+    `plausibility` (0..1) is the rigid-bone consistency of the frames this
+    metric was read from — a low value means the pose was physically
+    implausible there (jitter or an L/R label swap), so the number is shaky
+    regardless of the model's own keypoint scores."""
     factors: dict[str, float] = {}
     if detection is not None:
         factors[_F_DETECT] = detection
@@ -101,6 +108,8 @@ def metric_confidence(*, detection: float | None = None,
         factors[_F_TIME] = temporal_factor(frames_spanned)
     if n_samples is not None:
         factors[_F_SAMPLE] = sample_factor(n_samples)
+    if plausibility is not None:
+        factors[_F_PLAUSIBLE] = float(np.clip(plausibility, 0.0, 1.0))
     result = _combine(factors)
     # Uncalibrated distance is relative, not wrong: cap at Medium, don't multiply.
     if uncalibrated_distance and result.level == HIGH:
@@ -118,9 +127,16 @@ class ClipQuality:
     notes: list[str]
 
 
-def clip_quality(kpts: np.ndarray | None, fps: float,
-                 calibrated: bool) -> ClipQuality:
-    """Overall analysis-quality badge for the whole clip."""
+def clip_quality(kpts: np.ndarray | None, fps: float, calibrated: bool,
+                 mean_plausibility: float | None = None,
+                 view: str | None = None) -> ClipQuality:
+    """Overall analysis-quality badge for the whole clip.
+
+    `mean_plausibility` folds rigid-bone tracking noise into the score;
+    `view` (e.g. "frontal"/"oblique") is surfaced as an informational note —
+    per-metric validity by camera plane is handled where each metric is
+    graded, since a plane that's wrong for sprint angles can be right for a
+    frontal knee-valgus check."""
     if kpts is None or len(kpts) == 0:
         return ClipQuality(0.0, fps, False, calibrated, LOW,
                            ["No pose data."])
@@ -136,8 +152,17 @@ def clip_quality(kpts: np.ndarray | None, fps: float,
     if not calibrated:
         notes.append("uncalibrated — distances/speeds in body-heights")
 
+    plaus_factor = 1.0
+    if mean_plausibility is not None and np.isfinite(mean_plausibility):
+        plaus_factor = float(np.clip(mean_plausibility, 0.0, 1.0))
+        if plaus_factor < 0.9:
+            notes.append(f"{(1 - plaus_factor) * 100:.0f}% of frames look "
+                         "mistracked (jitter or L/R swap)")
+    if view is not None and view != "sagittal":
+        notes.append(f"filmed ~{view} — some angle metrics assume a side view")
+
     det_factor = float(np.clip(detection_rate, 0.0, 1.0))
     fps_factor = 1.0 if fps_adequate else 0.6
-    score = det_factor * fps_factor
+    score = det_factor * fps_factor * plaus_factor
     return ClipQuality(detection_rate, fps, fps_adequate, calibrated,
                        _level(score), notes)

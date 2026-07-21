@@ -90,3 +90,39 @@ def test_sprint_metrics_empty_events():
     m = compute_sprint_metrics(kpts, compute_angles(kpts), [], FPS)
     assert m.steps == []
     assert np.isnan(m.cadence_spm)
+
+
+def _gait_with_real_feet(T=300):
+    """A translating body whose feet actually plateau on the ground and swing,
+    so the sub-frame refinement has a real trajectory to interpolate."""
+    from tests.test_events import _apply_foot_y, _gait_foot_y
+    kpts = make_sequence(T)
+    kpts[:, :, 0] += np.arange(T)[:, None] * 8.0
+    _apply_foot_y(kpts, "left", _gait_foot_y(T, phase_offset=0))
+    _apply_foot_y(kpts, "right", _gait_foot_y(T, phase_offset=25))
+    return kpts
+
+
+def test_subframe_default_off_is_identical():
+    from athletic_analysis.core.events import detect_gait_events
+    kpts = _gait_with_real_feet()
+    angles = compute_angles(kpts)
+    events = detect_gait_events(kpts, FPS)
+    base = compute_sprint_metrics(kpts, angles, events, FPS)
+    same = compute_sprint_metrics(kpts, angles, events, FPS, subframe=False)
+    assert base.mean_contact_s == same.mean_contact_s
+    assert [s.contact_time_s for s in base.steps] == [s.contact_time_s for s in same.steps]
+
+
+def test_subframe_changes_timing_and_keeps_integer_strike_frames():
+    from athletic_analysis.core.events import detect_gait_events
+    kpts = _gait_with_real_feet()
+    angles = compute_angles(kpts)
+    events = detect_gait_events(kpts, FPS)
+    integer = compute_sprint_metrics(kpts, angles, events, FPS, subframe=False)
+    refined = compute_sprint_metrics(kpts, angles, events, FPS, subframe=True)
+    # Timing shifts (sub-frame precision), but strike frames stay integer for
+    # the UI, and contacts remain physically plausible.
+    assert refined.mean_contact_s != integer.mean_contact_s
+    assert all(float(s.strike_frame).is_integer() for s in refined.steps)
+    assert 0.0 < refined.mean_contact_s < 0.4

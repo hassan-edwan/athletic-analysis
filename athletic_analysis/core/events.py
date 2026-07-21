@@ -66,6 +66,68 @@ def contact_mask(foot_y: np.ndarray, fps: float,
     return mask
 
 
+def contact_threshold(foot_y: np.ndarray, ground_band: float = 0.15) -> float | None:
+    """The ground-proximity boundary `contact_mask` uses (foot on the ground
+    when foot_y is above it, i.e. numerically greater — y grows downward).
+    None when the foot never moves enough to define a threshold."""
+    y = np.asarray(foot_y, dtype=np.float64)
+    if len(y) < 3:
+        return None
+    lo, hi = np.nanpercentile(y, 5), np.nanpercentile(y, 95)
+    amp = hi - lo
+    if amp <= 1e-9:
+        return None
+    return float(np.nanpercentile(y, 90) - ground_band * amp)
+
+
+def refine_event_time(foot_y: np.ndarray, frame: int, kind: str,
+                      ground_band: float = 0.05) -> float:
+    """Fractional frame index of a strike/toe-off, by linearly interpolating
+    where foot_y crosses the ground threshold. Falls back to `frame` when the
+    geometry doesn't support a crossing (flat foot, clip edge, low confidence).
+
+    This recovers sub-frame precision: `detect_gait_events` can only land on a
+    whole frame, and it places a strike where the foot is near-ground *and*
+    slow — a few frames *after* the foot first touches on a fast descent. The
+    true contact instant is the air→ground crossing, so a strike walks back to
+    the first ground frame of its contact run and interpolates that crossing;
+    a toe-off walks forward to the ground→air crossing.
+
+    The crossing threshold (`ground_band`, default 0.05) is deliberately
+    *tighter* than the detection band (0.15): detection is loose so it reliably
+    catches the near-ground stance phase, but for timing we want the edge near
+    the actual ground level so the refined contact time tracks true touchdown/
+    toe-off (including the loading/push-off transition) rather than a point 15%
+    up the swing."""
+    y = np.asarray(foot_y, dtype=np.float64)
+    n = len(y)
+    thr = contact_threshold(foot_y, ground_band)
+    if thr is None or not (0 <= frame < n) or not np.isfinite(y[frame]):
+        return float(frame)
+
+    def _interp(air_i: int, ground_i: int) -> float:
+        y0, y1 = y[air_i], y[ground_i]
+        if not (np.isfinite(y0) and np.isfinite(y1)) or y0 == y1:
+            return float(min(air_i, ground_i) + (0 if air_i < ground_i else 1))
+        frac = float(np.clip((thr - y0) / (y1 - y0), 0.0, 1.0))
+        return air_i + frac if air_i < ground_i else ground_i + (1.0 - frac)
+
+    if kind == "strike":
+        j = frame  # walk back to the first ground frame of this contact run
+        while j > 0 and np.isfinite(y[j - 1]) and y[j - 1] >= thr:
+            j -= 1
+        if j == 0:
+            return 0.0
+        return _interp(j - 1, j)      # crossing between air (j-1) and ground (j)
+    else:  # toeoff: walk forward to the last ground frame, then the crossing up
+        j = frame
+        while j < n - 1 and np.isfinite(y[j + 1]) and y[j + 1] >= thr:
+            j += 1
+        if j == n - 1:
+            return float(n - 1)
+        return _interp(j + 1, j)      # crossing between ground (j) and air (j+1)
+
+
 def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
     """[start, end) index pairs of True runs."""
     padded = np.concatenate(([False], mask, [False]))

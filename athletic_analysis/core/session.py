@@ -24,6 +24,8 @@ from athletic_analysis.core.events import (GaitEvent, JumpPhases,
 from athletic_analysis.core.filtering import smooth_keypoints
 from athletic_analysis.core.metrics.jump import JumpMetrics, compute_jump_metrics
 from athletic_analysis.core.metrics.sprint import SprintMetrics, compute_sprint_metrics
+from athletic_analysis.core.quality import (TrackingQuality, ViewClassification,
+                                            classify_view, tracking_quality)
 from athletic_analysis.core.radar import SprintRadar, compute_sprint_radar
 from athletic_analysis.core.velocity import compute_velocities
 
@@ -55,6 +57,8 @@ class AnalysisSession:
     jump_form: list[FormFinding] = field(default_factory=list, repr=False)
     sprint_radar: SprintRadar | None = field(default=None, repr=False)
     quality: ClipQuality | None = field(default=None, repr=False)
+    tracking: TrackingQuality | None = field(default=None, repr=False)
+    view: ViewClassification | None = field(default=None, repr=False)
 
     @property
     def has_pose(self) -> bool:
@@ -66,24 +70,30 @@ class AnalysisSession:
             return
         self.keypoints = smooth_keypoints(self.keypoints_raw, self.fps)
         self.angles = compute_angles(self.keypoints)
+        self.tracking = tracking_quality(self.keypoints)
+        self.view = classify_view(self.keypoints)
         self.velocities, self.velocity_unit = compute_velocities(
             self.keypoints, self.fps, self.calibration)
         self.gait_events = detect_gait_events(self.keypoints, self.fps)
         self.jump_phases = detect_jump(self.keypoints, self.fps)
         self.sprint_metrics = compute_sprint_metrics(
-            self.keypoints, self.angles, self.gait_events, self.fps, self.calibration)
+            self.keypoints, self.angles, self.gait_events, self.fps,
+            self.calibration, subframe=True)
         self.jump_metrics = compute_jump_metrics(
             self.keypoints, self.angles, self.jump_phases, self.fps, self.calibration)
         self.sprint_form = analyze_sprint_form(
             self.keypoints, self.sprint_metrics, self.velocities, self.fps,
-            self.athlete_level)
+            self.athlete_level, plausibility=self.tracking.plausibility)
         self.jump_form = analyze_jump_form(
-            self.jump_metrics, self.keypoints, self.fps, self.athlete_level)
+            self.jump_metrics, self.keypoints, self.fps, self.athlete_level,
+            view=self.view.view)
         self.sprint_radar = compute_sprint_radar(
             self.keypoints, self.sprint_metrics, self.velocities, self.fps,
             self.athlete_level)
-        self.quality = clip_quality(self.keypoints, self.fps,
-                                    self.calibration is not None)
+        self.quality = clip_quality(
+            self.keypoints, self.fps, self.calibration is not None,
+            mean_plausibility=self.tracking.mean_plausibility,
+            view=self.view.view)
 
     # --- persistence -------------------------------------------------------
 

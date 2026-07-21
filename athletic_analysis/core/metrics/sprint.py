@@ -12,7 +12,7 @@ import numpy as np
 
 from athletic_analysis.core.angles import estimate_body_height_px
 from athletic_analysis.core.calibration import Calibration
-from athletic_analysis.core.events import GaitEvent
+from athletic_analysis.core.events import GaitEvent, foot_y_signal, refine_event_time
 from athletic_analysis.core.pose.skeleton import KP
 from athletic_analysis.core.velocity import rolling_nanmean
 
@@ -54,7 +54,13 @@ def _at(series: np.ndarray, frame: int) -> float:
 
 def compute_sprint_metrics(kpts: np.ndarray, angles: dict[str, np.ndarray],
                            events: list[GaitEvent], fps: float,
-                           calib: Calibration | None = None) -> SprintMetrics:
+                           calib: Calibration | None = None,
+                           subframe: bool = False) -> SprintMetrics:
+    """`subframe` refines contact/flight/step timing to fractional frames by
+    interpolating the true ground-crossing between frames (events.refine_event_time),
+    reclaiming most of the precision lost to frame quantization on low-fps
+    footage. Default False keeps the integer-frame behavior byte-identical
+    (the iOS parity contract); the app runs with it on."""
     m = SprintMetrics()
     strikes = [ev for ev in events if ev.kind == "strike"]
     if not strikes:
@@ -74,6 +80,24 @@ def compute_sprint_metrics(kpts: np.ndarray, angles: dict[str, np.ndarray],
 
     hip_x = kpts[:, KP["hip_center"], 0].astype(np.float64)
 
+    # Event time / hip-x samplers: fractional (interpolated) when subframe,
+    # otherwise exact integer-frame reads — so the default path is unchanged.
+    if subframe:
+        foot_y = {s: foot_y_signal(kpts, s) for s in ("left", "right")}
+        _hx_idx = np.arange(len(hip_x))
+
+        def etime(ev: GaitEvent) -> float:
+            return refine_event_time(foot_y[ev.side], ev.frame, ev.kind)
+
+        def hx_at(ev: GaitEvent) -> float:
+            return float(np.interp(etime(ev), _hx_idx, hip_x))
+    else:
+        def etime(ev: GaitEvent) -> float:
+            return float(ev.frame)
+
+        def hx_at(ev: GaitEvent) -> float:
+            return float(hip_x[ev.frame])
+
     for i, strike in enumerate(strikes):
         side_key = strike.side[0]  # 'l' / 'r'
         other = "r" if side_key == "l" else "l"
@@ -83,14 +107,18 @@ def compute_sprint_metrics(kpts: np.ndarray, angles: dict[str, np.ndarray],
                        and ev.frame > strike.frame), None)
         nxt = strikes[i + 1] if i + 1 < len(strikes) else None
 
-        contact_s = ((toeoff.frame - strike.frame) / fps
+        strike_t = etime(strike)
+        toeoff_t = etime(toeoff) if toeoff else float("nan")
+        nxt_t = etime(nxt) if nxt else float("nan")
+
+        contact_s = ((toeoff_t - strike_t) / fps
                      if toeoff and (nxt is None or toeoff.frame <= nxt.frame)
                      else float("nan"))
-        flight_s = ((nxt.frame - toeoff.frame) / fps
+        flight_s = ((nxt_t - toeoff_t) / fps
                     if toeoff and nxt and nxt.frame > toeoff.frame
                     else float("nan"))
-        step_s = (nxt.frame - strike.frame) / fps if nxt else float("nan")
-        step_len = (px_to_len(abs(hip_x[nxt.frame] - hip_x[strike.frame]))
+        step_s = (nxt_t - strike_t) / fps if nxt else float("nan")
+        step_len = (px_to_len(abs(hx_at(nxt) - hx_at(strike)))
                     if nxt else float("nan"))
         step_speed = step_len / step_s if nxt and step_s > 0 else float("nan")
 
