@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (QComboBox, QDockWidget, QFileDialog,
 from athletic_analysis.core.calibration import Calibration
 from athletic_analysis.core.coaching import (ATHLETE_LEVELS, bucket_sprint_steps,
                                              plot_target_bands, segment_phases)
-from athletic_analysis.core.compare import build_comparisons
 from athletic_analysis.core.settings import MODEL_TIERS, Settings
 from athletic_analysis.core.pose.skeleton import (draw_angle_labels,
                                                   draw_info_text, draw_pose)
@@ -26,10 +25,11 @@ from athletic_analysis.export.video_export import export_annotated_video
 from athletic_analysis.core.preprocess import (Preprocessor, ReframeTracker,
                                                keypoints_bbox)
 from athletic_analysis.ui import theme
+from athletic_analysis.core import form_overlay
+from athletic_analysis.core.angles import travel_direction
 from athletic_analysis.ui.analysis_worker import AnalysisWorker
 from athletic_analysis.ui.assessment_worker import AssessmentWorker
-from athletic_analysis.ui.compare_panel import ComparePanel
-from athletic_analysis.ui.form_panel import FormPanel
+from athletic_analysis.ui.form_review_panel import FormReviewPanel
 from athletic_analysis.ui.keyframe_strip import KeyframeStrip
 from athletic_analysis.ui.metrics_panel import MetricsPanel
 from athletic_analysis.ui.rep_card import RepCard
@@ -97,8 +97,9 @@ class MainWindow(QMainWindow):
         # dig into why, then the raw numbers underneath.
         self.suitability_panel = SuitabilityPanel()
         self.rep_card = RepCard()
-        self.form_panel = FormPanel(self._render_replay)
-        self.compare_panel = ComparePanel(self._render_replay_frame)
+        # Form + Compare merged into one review tab: the grade, the footage with
+        # the optimal form drawn behind the runner, and how far off they are.
+        self.form_review = FormReviewPanel(self._render_review_frame)
         self.step_charts = StepCharts()
         self.keyframe_strip = KeyframeStrip()
         self.plot_panel = PlotPanel()
@@ -107,8 +108,7 @@ class MainWindow(QMainWindow):
         side_tabs = QTabWidget()
         side_tabs.addTab(self.suitability_panel, "Suitability")
         side_tabs.addTab(self.rep_card, "Summary")
-        side_tabs.addTab(self.form_panel, "Form")
-        side_tabs.addTab(self.compare_panel, "Compare")
+        side_tabs.addTab(self.form_review, "Form")
         side_tabs.addTab(self.step_charts, "Steps")
         side_tabs.addTab(self.keyframe_strip, "Key frames")
         side_tabs.addTab(self.plot_panel, "Curves")
@@ -201,9 +201,8 @@ class MainWindow(QMainWindow):
         self.timeline.frame_requested.connect(self.seek)
         self.plot_panel.frame_requested.connect(self.seek)
         self.metrics_panel.frame_requested.connect(self.seek)
-        self.form_panel.frame_requested.connect(self.seek)
+        self.form_review.frame_requested.connect(self.seek)
         self.rep_card.frame_requested.connect(self.seek)
-        self.compare_panel.frame_requested.connect(self.seek)
         self.step_charts.frame_requested.connect(self.seek)
         self.keyframe_strip.frame_requested.connect(self.seek)
         self.timeline.phase_zoom_requested.connect(self.plot_panel.zoom_to_frames)
@@ -237,7 +236,6 @@ class MainWindow(QMainWindow):
             self.source.close()
         self.source = source
         self.timeline.set_frame_count(source.frame_count)
-        self.compare_panel.set_frame_count(source.frame_count)
         self.session = session or AnalysisSession(video_path=path, fps=source.fps)
         self.session.rotation = rotation
         idx = self.mode_combo.findData(self.session.mode)
@@ -297,7 +295,6 @@ class MainWindow(QMainWindow):
         if self.session:
             self.session.rotation = degrees
         self.timeline.set_frame_count(self.source.frame_count)
-        self.compare_panel.set_frame_count(self.source.frame_count)
         self.seek(min(self.current_frame, self.source.frame_count - 1))
         self.statusBar().showMessage(f"Rotated {degrees}° for correct orientation.")
 
@@ -403,7 +400,6 @@ class MainWindow(QMainWindow):
         if self.source and len(keypoints) < self.source.frame_count:
             self.source.frame_count = len(keypoints)
             self.timeline.set_frame_count(len(keypoints))
-            self.compare_panel.set_frame_count(len(keypoints))
         self.session.recompute()
         try:
             self.session.save()
@@ -434,12 +430,11 @@ class MainWindow(QMainWindow):
             self.timeline.set_phases([])
             self.plot_panel.set_data({}, {}, self.source.fps if self.source else 30.0)
             self.metrics_panel.show_sprint(None)
-            self.form_panel.show_findings([])
+            self.form_review.clear("Run pose analysis to review your form.")
             self.plot_panel.set_phases([])
             self.rep_card.clear("Run pose analysis to see this rep's summary.")
             self.step_charts.set_steps([], "BH")
             self.keyframe_strip.set_keyframes([], lambda _f: None)
-            self.compare_panel.set_comparisons([])
             self._update_actions()
             return
         self.plot_panel.set_data(s.angles, s.velocities, s.fps, s.velocity_unit)
@@ -454,11 +449,13 @@ class MainWindow(QMainWindow):
                                            s.velocities, s.fps)
                       if has_steps else {})
             self.metrics_panel.show_sprint(s.sprint_metrics, buckets, s.athlete_level)
-            self.form_panel.show_findings(s.sprint_form, buckets, s.athlete_level)
+            spans = segment_phases(s.velocities.get("run_speed"), s.fps)
+            self.form_review.set_analysis(
+                s.sprint_form, s.keypoints, s.angles, spans, s.athlete_level,
+                travel_direction(s.keypoints), len(s.keypoints))
             self.rep_card.show_sprint(s.sprint_metrics, s.sprint_form,
                                       s.quality, s.model_tier,
                                       radar=s.sprint_radar)
-            spans = segment_phases(s.velocities.get("run_speed"), s.fps)
             self.plot_panel.set_phases(
                 spans, targets=plot_target_bands(s.athlete_level))
             self.timeline.set_phases(spans)
@@ -471,20 +468,17 @@ class MainWindow(QMainWindow):
                 knee_txt = f" · knee {knee:.0f}°" if np.isfinite(knee) else ""
                 keyframes.append((step.strike_frame,
                                   f"{step.side} strike f{step.strike_frame}{knee_txt}"))
-            if has_steps:
-                comparisons = build_comparisons(s.sprint_form, buckets, s.athlete_level)
-                self.compare_panel.set_comparisons(comparisons)
-            else:
-                self.compare_panel.set_comparisons([])
         else:
             self.metrics_panel.show_jump(s.jump_metrics)
-            self.form_panel.show_findings(s.jump_form)
+            # The optimal-overlay review is sprint-only (it needs the phase
+            # model and per-frame posable angles a sprint has); for jumps the
+            # tab still lists the graded checks + diagnosis, no overlay.
+            self.form_review.set_analysis(
+                s.jump_form, s.keypoints, s.angles, [], s.athlete_level,
+                travel_direction(s.keypoints), len(s.keypoints))
             self.rep_card.show_jump(s.jump_metrics, s.jump_form,
                                     s.quality, s.model_tier)
             self.step_charts.set_steps([], "BH")
-            self.compare_panel.set_comparisons(
-                [], "Compare isn't available for jumps yet — it needs the "
-                    "repeated per-phase steps a sprint has.")
             jump_spans: list[tuple[int, int, str]] = []
             if s.jump_phases:
                 jp = s.jump_phases
@@ -541,44 +535,19 @@ class MainWindow(QMainWindow):
         self._replay_tracker = ReframeTracker(boxes=boxes, frame_w=src.width,
                                               frame_h=src.height)
 
-    def _render_replay_frame(self, frame: int) -> np.ndarray | None:
-        """A single pose-drawn frame cropped to the athlete via the shared
-        replay tracker — the frame source for both the Compare-tab scrubber
-        preview and the Form-tab replay clips. Falls back to the full frame
-        when there's no tracker (e.g. no pose yet)."""
+    def _render_review_frame(self, frame: int, spec, severity: str,
+                             off: float) -> np.ndarray | None:
+        """The Form-review frame source: pose drawn, the optimal-form ghost
+        overlaid (when `spec` is given), then cropped tight to the athlete via
+        the shared tracker. `spec` is a form_overlay.OverlaySpec or None."""
         img = self._render_keyframe(frame)
-        if img is None or self._replay_tracker is None:
-            return img
-        cropped, _ = self._replay_tracker.crop_and_map(img, frame)
-        return cropped
-
-    def _render_keyframe_range(self, center_frame: int, half_window_frames: int,
-                               max_frames: int = 16) -> list[np.ndarray]:
-        """Every cropped replay frame in [center - half_window, center +
-        half_window], subsampled to at most `max_frames` — a replay clip is a
-        short, slow-motion loop, not a full re-decode of a high-fps clip's
-        worth of frames every time a comparison is built."""
-        if not self.source:
-            return []
-        lo = max(0, center_frame - half_window_frames)
-        hi = min(self.source.frame_count - 1, center_frame + half_window_frames)
-        if hi < lo:
-            return []
-        frames = list(range(lo, hi + 1))
-        if len(frames) > max_frames:
-            idx = np.linspace(0, len(frames) - 1, max_frames)
-            picked = [frames[round(i)] for i in idx]
-            seen: set[int] = set()
-            frames = [f for f in picked if not (f in seen or seen.add(f))]
-        return [img for f in frames if (img := self._render_replay_frame(f)) is not None]
-
-    def _render_replay(self, center_frame: int) -> list[np.ndarray]:
-        """A ~0.4 s-either-side replay clip around `center_frame` — the
-        real-footage half of the Form tab's inline comparison. Tight enough
-        to stay on the flagged moment (checks are measured at a foot-strike
-        instant) rather than wandering into approach/recovery motion."""
-        fps = self.source.fps if self.source else 30.0
-        return self._render_keyframe_range(center_frame, round(0.2 * fps))
+        if img is None:
+            return None
+        if spec is not None:
+            form_overlay.draw_overlay(img, spec, severity, off)
+        if self._replay_tracker is not None:
+            img, _ = self._replay_tracker.crop_and_map(img, frame)
+        return img
 
     def _on_mode_changed(self) -> None:
         if self.session:
